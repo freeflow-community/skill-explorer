@@ -131,6 +131,10 @@ function excerpt(text, max = 200) {
 }
 
 const repoLabel = (url) => String(url).replace("https://github.com/", "");
+const repoOwner = (url) => repoLabel(url).split("/")[0] ?? "";
+/** Small owner/org label linking to that repository's skills. */
+const ownerChip = (url) =>
+  `<a class="owner" href="#/search?repo=${enc(url)}" title="All skills from ${esc(repoLabel(url))}">${esc(repoOwner(url))}</a>`;
 const repoLink = (url, text) => `<a href="#/search?repo=${enc(url)}">${esc(text ?? repoLabel(url))}</a>`;
 
 const tagChips = (tags) => (tags.length ? `<div class="chips">${tags.map((t) => `<a class="chip" href="#/search?tag=${enc(t)}">${esc(t)}</a>`).join("")}</div>` : "");
@@ -142,7 +146,8 @@ function card(s) {
     <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
       <span class="card-right">${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
     ${s.description ? `<p class="desc">${esc(excerpt(s.description))}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
-    <div class="foot">${tagChips(s.tags)}<span class="date" title="${esc(fullDate(s.createdAt))}">added ${relTime(s.createdAt)}</span></div>
+    <div class="foot">${tagChips(s.tags)}
+      <span class="foot-right">${ownerChip(s.repoUrl)}<span class="date" title="${esc(fullDate(s.createdAt))}">added ${relTime(s.createdAt)}</span></span></div>
   </article>`;
 }
 
@@ -276,7 +281,7 @@ async function viewSearch(params) {
       .map((s) => `<a class="result" href="#/skill/${enc(s.slug)}">
           <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
-          ${s.tags.length ? `<div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}</div>` : ""}
+          <div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<span class="owner-inline">${esc(repoLabel(s.repoUrl))}</span></div>
         </a>`).join("")}</div>`
       : `<div class="empty"><h2>No skills match</h2><p class="muted">Search looks at skill names and descriptions. Try fewer or shorter words, or remove a filter.</p><a class="btn" href="#/">Back to the index</a></div>`}`;
 }

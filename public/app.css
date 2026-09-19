@@ -97,6 +97,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .card h3 { overflow-wrap: anywhere; }
 .card .desc { font-size: 0.93rem; color: var(--ink); }
 .card .foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.foot-right { display: inline-flex; align-items: baseline; gap: 8px; margin-left: auto; }
+.owner { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.owner:hover { color: var(--accent); text-decoration: underline; }
+.owner-inline { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); margin-left: auto; white-space: nowrap; }
 .date { font-size: 0.78rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* stars */
