@@ -10,6 +10,7 @@ import { validateFlowHtml } from "../src/flows/validate.ts";
 import { guessCollection, isSkillPath, parseRepo, parseSkillMd } from "../src/github.ts";
 import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../src/indexSync.ts";
 import { createApp, IndexHolder } from "../src/server.ts";
+import { StarStore } from "../src/stars.ts";
 import { LocalBlobStore } from "../src/storage.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "skills-explorer-"));
@@ -179,6 +180,59 @@ test("flow jobs run in the background and store the page", async () => {
   assert.match(failed.error!, /Could not read/);
 });
 
+test("stars: counted per skill, never negative, restored from storage", async () => {
+  const store = new LocalBlobStore(tmp());
+  const stars = new StarStore({ dbPath: ":memory:", store, key: "index/stars.json" });
+  assert.equal(stars.get("review-pr"), 0);
+  assert.equal(stars.change("review-pr", 1), 1);
+  assert.equal(stars.change("review-pr", 1), 2);
+  assert.equal(stars.change("provision-cloud-agent", 1), 1);
+  assert.equal(stars.change("review-pr", -1), 1);
+  assert.equal(stars.change("provision-cloud-agent", -1), 0);
+  assert.equal(stars.change("provision-cloud-agent", -1), 0, "counts never go below zero");
+  assert.deepEqual(stars.top(5).map((r) => [r.slug, r.count]), [["review-pr", 1]]);
+  await stars.snapshot();
+
+  const rebuilt = new StarStore({ dbPath: ":memory:", store, key: "index/stars.json" });
+  await rebuilt.restore();
+  assert.equal(rebuilt.get("review-pr"), 1, "counts survive a rebuilt volume");
+});
+
+test("HTTP API: stars, popular tab and favourites lookup", async () => {
+  const dir = tmp();
+  const dbPath = join(dir, "i.db");
+  seed(dbPath).close();
+  const holder = new IndexHolder(dbPath);
+  const generator = new StubFlowGenerator(5);
+  const stars = new StarStore({ dbPath: ":memory:" });
+  const flows = new FlowService({
+    store: new LocalBlobStore(join(dir, "blobs")), generator, jobsDbPath: ":memory:",
+    findSkill: (s) => holder.current.getBySlug(s), loadSources: async () => [{ path: "SKILL.md", content: "x" }],
+  });
+  const app = createApp({ index: holder, flows, generator, stars });
+
+  const post = (slug: string, body: unknown) =>
+    app.request(`/api/skills/${slug}/star`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  assert.equal((await (await post("review-pr", { starred: true })).json()).stars, 1);
+  await post("provision-cloud-agent", { starred: true });
+  await post("provision-cloud-agent", { starred: true });
+  assert.equal((await post("nope", { starred: true })).status, 404);
+
+  const home = await (await app.request("/api/home")).json();
+  assert.deepEqual(home.popular.map((s: { slug: string; stars: number }) => [s.slug, s.stars]), [["provision-cloud-agent", 2], ["review-pr", 1]]);
+  assert.equal(home.stars["review-pr"], 1);
+
+  const detail = await (await app.request("/api/skills/review-pr")).json();
+  assert.equal(detail.stars, 1);
+
+  const favs = await (await app.request("/api/skills?slugs=review-pr,gone,provision-cloud-agent")).json();
+  assert.deepEqual(favs.results.map((s: { slug: string }) => s.slug), ["review-pr", "provision-cloud-agent"]);
+
+  assert.equal((await (await post("review-pr", { starred: false })).json()).stars, 0);
+  assert.deepEqual((await (await app.request("/api/popular")).json()).results.map((s: { slug: string }) => s.slug), ["provision-cloud-agent"]);
+});
+
 test("HTTP API: home, search, detail, build and sandboxed flow page", async () => {
   const dir = tmp();
   const dbPath = join(dir, "i.db");
@@ -190,7 +244,7 @@ test("HTTP API: home, search, detail, build and sandboxed flow page", async () =
     findSkill: (s) => holder.current.getBySlug(s),
     loadSources: async () => [{ path: "SKILL.md", content: "## Only step" }],
   });
-  const app = createApp({ index: holder, flows, generator });
+  const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }) });
 
   const home = await (await app.request("/api/home")).json();
   assert.equal(home.total, 2);

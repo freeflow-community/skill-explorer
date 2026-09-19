@@ -41,6 +41,7 @@ export const config = {
   },
   indexDbPath: resolve(env("INDEX_DB", `${dataDir}/skills.db`)),
   jobsDbPath: resolve(env("JOBS_DB", `${dataDir}/jobs.db`)),
+  starsDbPath: resolve(env("STARS_DB", `${dataDir}/stars.db`)),
 
   storage: {
     backend: env("STORAGE", r2Bucket ? "r2" : "local") as "r2" | "local",
@@ -53,6 +54,7 @@ export const config = {
       endpoint: env("R2_ENDPOINT"),
     },
     indexKey: env("INDEX_KEY", "index/skills.db"),
+    starsKey: env("STARS_KEY", "index/stars.json"),
     flowPrefix: env("FLOW_PREFIX", "flows/"),
   },
 

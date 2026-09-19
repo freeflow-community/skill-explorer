@@ -8,6 +8,7 @@ import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
+import { StarStore } from "./stars.ts";
 import { getStore, type BlobStore } from "./storage.ts";
 
 const log = createLogger("server");
@@ -76,8 +77,8 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
-export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator }) {
-  const { index, flows } = opts;
+export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore }) {
+  const { index, flows, stars } = opts;
   const app = new Hono();
   const idx = () => index.current;
 
@@ -109,6 +110,14 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     }),
   );
 
+  /** Skills ordered by stars, with their counts attached. */
+  const popular = (limit = 12) => {
+    const top = stars.top(limit);
+    const skills = idx().getBySlugs(top.map((t) => t.slug));
+    const counts = new Map(top.map((t) => [t.slug, t.count]));
+    return skills.map((s) => ({ ...s, stars: counts.get(s.slug) ?? 0 }));
+  };
+
   app.get("/api/home", async (c) => {
     // The example flow is only advertised once it has actually been built.
     const slug = config.exampleFlowSlug;
@@ -119,6 +128,8 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
       tags: idx().tagCounts(),
       collections: idx().collections(),
       total: idx().count(),
+      popular: popular(12),
+      stars: stars.counts(),
       example: skill && flow ? { slug: skill.slug, name: skill.name, description: skill.description, model: flow.model, builtAt: flow.builtAt } : null,
     });
   });
@@ -132,10 +143,28 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
 
   app.get("/api/tags", (c) => c.json(idx().tagCounts()));
 
+  app.get("/api/popular", (c) => c.json({ results: popular(Number(c.req.query("limit")) || 50) }));
+
+  /** Bulk lookup for the reader's favourites, which live in their browser. */
+  app.get("/api/skills", (c) => {
+    const slugs = (c.req.query("slugs") ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 200);
+    const counts = stars.counts();
+    return c.json({ results: idx().getBySlugs(slugs).map((s) => ({ ...s, stars: counts[s.slug] ?? 0 })) });
+  });
+
+  /** One visitor's star, counted once per browser (the browser holds the state). */
+  app.post("/api/skills/:slug/star", async (c) => {
+    const slug = c.req.param("slug");
+    if (!idx().getBySlug(slug)) return c.json({ error: "No skill with that name is in the index" }, 404);
+    const body = await c.req.json().catch(() => ({}));
+    const starred = body?.starred !== false;
+    return c.json({ slug, starred, stars: stars.change(slug, starred ? 1 : -1) });
+  });
+
   app.get("/api/skills/:slug", async (c) => {
     const skill = idx().getBySlug(c.req.param("slug"));
     if (!skill) return c.json({ error: "No skill with that name is in the index" }, 404);
-    return c.json({ skill, links: skillLinks(skill), flow: await flows.status(skill.slug) });
+    return c.json({ skill, links: skillLinks(skill), flow: await flows.status(skill.slug), stars: stars.get(skill.slug) });
   });
 
   app.get("/api/skills/:slug/flow", async (c) => {
@@ -180,6 +209,8 @@ async function main() {
     maxTokens: config.flow.maxTokens, concurrency: config.flow.concurrency, buildToken: !!config.flow.buildToken,
   });
   const flows = new FlowService({ store, generator, findSkill: (slug) => index.current.getBySlug(slug) });
+  const stars = new StarStore({ store });
+  await stars.restore();
 
   if (config.indexRefreshSeconds > 0) {
     setInterval(() => {
@@ -187,7 +218,10 @@ async function main() {
     }, config.indexRefreshSeconds * 1000).unref();
   }
 
-  const app = createApp({ index, flows, generator });
+  const app = createApp({ index, flows, generator, stars });
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => void stars.snapshot().finally(() => process.exit(0)));
+  }
   serve({ fetch: app.fetch, port: config.port }, (info) => {
     log.info(`Skills Explorer on http://localhost:${info.port}`, { logLevel: process.env.LOG_LEVEL ?? "info" });
   });

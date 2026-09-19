@@ -68,6 +68,48 @@ function relTime(iso) {
 }
 const fullDate = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+/* ---------------- stars (this browser's favourites) ---------------- */
+
+const STAR_KEY = "se-stars";
+let starred = new Set();
+try {
+  starred = new Set(JSON.parse(storage(STAR_KEY) || "[]"));
+} catch {
+  starred = new Set();
+}
+const isStarred = (slug) => starred.has(slug);
+
+/** Toggle a star locally, then tell the server so the Popular list can count it. */
+async function toggleStar(slug) {
+  const now = !isStarred(slug);
+  if (now) starred.add(slug);
+  else starred.delete(slug);
+  try {
+    storage(STAR_KEY, JSON.stringify([...starred]));
+  } catch {
+    // A viewer with storage blocked still gets the visual toggle for this page view.
+  }
+  capture(now ? "skill_starred" : "skill_unstarred", { skill: slug });
+  track(now ? "skill_starred" : "skill_unstarred", { skill: slug });
+  try {
+    const d = await api(`/api/skills/${enc(slug)}/star`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ starred: now }),
+    });
+    return d.stars;
+  } catch {
+    return null; // the local star stands even if the count could not be recorded
+  }
+}
+
+function starButton(slug, count) {
+  const on = isStarred(slug);
+  return `<button type="button" class="star ${on ? "on" : ""}" data-star="${esc(slug)}"
+    aria-pressed="${on}" aria-label="${on ? "Remove" : "Add"} ${esc(slug)} ${on ? "from" : "to"} your favourites" title="${on ? "Starred" : "Star this skill"}">
+    <span class="star-icon" aria-hidden="true">${on ? "★" : "☆"}</span><span class="star-count">${count ? count : ""}</span></button>`;
+}
+
 /** Escape text, then wrap each search term in <mark>. */
 function highlight(text, terms) {
   let out = esc(text);
@@ -92,9 +134,10 @@ const tagChips = (tags) => (tags.length ? `<div class="chips">${tags.map((t) => 
 const collChip = (c) => (c ? `<a class="coll" href="#/search?collection=${enc(c)}">${esc(c)}</a>` : "");
 
 function card(s) {
-  // The card is a div (not a link) so its tag and collection links stay separate targets.
+  // The card is a div (not a link) so its tag, collection and star controls stay separate targets.
   return `<article class="card">
-    <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>${collChip(s.collection)}</div>
+    <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
+      <span class="card-right">${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
     ${s.description ? `<p class="desc">${esc(excerpt(s.description))}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
     <div class="foot">${tagChips(s.tags)}<span class="date" title="${esc(fullDate(s.createdAt))}">added ${relTime(s.createdAt)}</span></div>
   </article>`;
@@ -120,8 +163,18 @@ function tagCloud(tags) {
 
 /* ---------------- views ---------------- */
 
+let homeData = null;
+
+function favoritesSummary() {
+  const n = starred.size;
+  return n
+    ? `<p><a href="#/favorites">${n} starred skill${n === 1 ? "" : "s"}</a></p>`
+    : `<p class="muted">Star a skill with ☆ and it shows up here, on this browser.</p>`;
+}
+
 async function viewHome() {
   const d = await api("/api/home");
+  homeData = d;
   if (!d.total) {
     app.innerHTML = `<div class="empty"><h1>No skills indexed yet</h1>
       <p class="lede">Add a repository with the index tool, then reload this page:</p>
@@ -137,16 +190,60 @@ async function viewHome() {
     <div class="home">
       <section class="section">
         ${d.example ? examplePromo(d.example) : ""}
-        <div class="section-head"><h2>New in the index</h2><a href="#/search">Browse all</a></div>
-        <div class="cards">${d.recent.map(card).join("")}</div>
+        <div class="section-head">
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" class="tab" id="tab-new" aria-selected="true" data-tab="new">New in the index</button>
+            <button type="button" role="tab" class="tab" id="tab-popular" aria-selected="false" data-tab="popular">Popular</button>
+          </div>
+          <a href="#/search">Browse all</a>
+        </div>
+        <div class="cards" id="homeList">${d.recent.map(card).join("")}</div>
       </section>
       <aside class="side">
+        <section class="section"><h2>Favorites</h2>${favoritesSummary()}</section>
         <section class="section"><h2>Tags</h2>${tagCloud(d.tags)}</section>
         ${d.collections.length ? `<section class="section"><h2>Collections</h2><ul class="list-plain">${d.collections
           .map((c) => `<li><a href="#/search?collection=${enc(c.collection)}"><span>${esc(c.collection)}</span><span class="n">${c.count}</span></a></li>`)
           .join("")}</ul></section>` : ""}
       </aside>
     </div>`;
+  bindHomeTabs();
+}
+
+function bindHomeTabs() {
+  document.querySelectorAll("[data-tab]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const which = btn.dataset.tab;
+      document.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+      const list = document.getElementById("homeList");
+      capture("home_tab_changed", { tab: which });
+      if (which !== "popular") {
+        list.innerHTML = homeData.recent.map(card).join("");
+        return;
+      }
+      // Re-fetch so stars added since the page loaded are counted.
+      const items = await api("/api/popular?limit=12").then((d) => d.results).catch(() => homeData.popular);
+      list.innerHTML = items.length
+        ? items.map(card).join("")
+        : `<p class="muted">No skills have been starred yet. Star one with ☆ and it appears here.</p>`;
+    }),
+  );
+}
+
+async function viewFavorites() {
+  const slugs = [...starred];
+  if (!slugs.length) {
+    app.innerHTML = `<div class="empty"><h1>No favorites yet</h1>
+      <p class="muted">Star a skill with ☆ on any skill page or card. Favorites are kept in this browser only, so they don't follow you to another device.</p>
+      <a class="btn" href="#/">Back to the index</a></div>`;
+    return;
+  }
+  const d = await api(`/api/skills?slugs=${enc(slugs.join(","))}`);
+  const missing = slugs.length - d.results.length;
+  app.innerHTML = `<section class="intro"><span class="eyebrow">Favorites</span>
+      <h1>${d.results.length} starred skill${d.results.length === 1 ? "" : "s"}</h1>
+      <p class="lede">Kept in this browser only.${missing ? ` ${missing} starred skill${missing === 1 ? " is" : "s are"} no longer in the index.` : ""}</p></section>
+    <div class="cards">${d.results.map(card).join("")}</div>`;
 }
 
 async function viewSearch(params) {
@@ -172,7 +269,7 @@ async function viewSearch(params) {
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
     ${d.results.length ? `<div class="results">${d.results
       .map((s) => `<a class="result" href="#/skill/${enc(s.slug)}">
-          <h3>${highlight(s.name, terms)}</h3>${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : "<span></span>"}
+          <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
           ${s.tags.length ? `<div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}</div>` : ""}
         </a>`).join("")}</div>`
@@ -196,7 +293,7 @@ async function viewSkill(slug, params = new URLSearchParams()) {
     <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Index</a><span>/</span>${s.collection ? `<a href="#/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
     <section class="detail-head">
       <span class="eyebrow">Skill</span>
-      <h1>${esc(s.name)}</h1>
+      <div class="title-row"><h1>${esc(s.name)}</h1>${starButton(s.slug, d.stars ?? 0)}</div>
       ${s.description ? `<p class="desc">${esc(s.description)}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
       ${tagChips(s.tags)}
     </section>
@@ -359,6 +456,7 @@ async function route() {
   if (!path.startsWith("/search")) qInput.value = "";
   try {
     if (path.startsWith("/skill/")) await viewSkill(decodeURIComponent(path.slice("/skill/".length)), params);
+    else if (path.startsWith("/favorites")) await viewFavorites();
     else if (path.startsWith("/search")) await viewSearch(params);
     else await viewHome();
   } catch (e) {
@@ -381,6 +479,21 @@ async function route() {
     page_title: document.title,
   });
 }
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-star]");
+  if (!btn) return;
+  e.preventDefault();
+  const slug = btn.dataset.star;
+  const count = await toggleStar(slug);
+  // Redraw every star for this skill (a card and the detail header can both be on screen).
+  document.querySelectorAll(`[data-star="${CSS.escape(slug)}"]`).forEach((el) => {
+    const shown = count ?? (Number(el.querySelector(".star-count")?.textContent) || 0) + (isStarred(slug) ? 1 : -1);
+    el.outerHTML = starButton(slug, Math.max(0, shown));
+  });
+  const fav = document.querySelector(".side .section p");
+  if (fav && location.hash.replace(/^#/, "").split("?")[0] === "/") fav.outerHTML = favoritesSummary();
+});
 
 document.getElementById("searchForm").addEventListener("submit", (e) => {
   e.preventDefault();

@@ -190,6 +190,15 @@ export class SkillIndex {
     return r ? toSkill(r) : null;
   }
 
+  /** Look up several skills at once; unknown slugs are skipped. */
+  getBySlugs(slugs: string[]): Skill[] {
+    if (!slugs.length) return [];
+    const holes = slugs.map(() => "?").join(",");
+    const rows = this.db.prepare(`${SELECT} WHERE s.slug IN (${holes})`).all(...slugs) as Row[];
+    const bySlug = new Map(rows.map((r) => [r.slug as string, toSkill(r)]));
+    return slugs.flatMap((slug) => { const s = bySlug.get(slug); return s ? [s] : []; });
+  }
+
   recent(limit = 12): Skill[] {
     return (this.db.prepare(`${SELECT} ORDER BY s.created_at DESC, s.id DESC LIMIT ?`).all(limit) as Row[]).map(toSkill);
   }
