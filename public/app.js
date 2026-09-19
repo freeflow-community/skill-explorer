@@ -91,11 +91,8 @@ function card(s) {
 
 function examplePromo(ex) {
   return `<a class="promo" href="#/skill/${enc(ex.slug)}?flow">
-    <div class="promo-text">
-      <span class="eyebrow">Example visual flow</span>
-      <h2>${esc(ex.name)}</h2>
-      <p>See what Claude builds from a skill: an interactive walkthrough with the skill's own setup choices, stages, commands and checklists. Built with <span class="mono">${esc(ex.model)}</span>.</p>
-    </div>
+    <span class="eyebrow">Example flow</span>
+    <span class="promo-text"><strong>${esc(ex.name)}</strong> — see what a built visual flow looks like</span>
     <span class="btn primary" aria-hidden="true">Open the flow</span>
   </a>`;
 }
