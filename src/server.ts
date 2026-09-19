@@ -105,6 +105,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
       flowGenerator: config.flow.generator,
       buildRequiresToken: !!config.flow.buildToken,
       storage: config.storage.backend,
+      posthog: config.posthog,
     }),
   );
 

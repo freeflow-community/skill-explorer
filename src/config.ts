@@ -18,10 +18,27 @@ const DEFAULT_MODEL: Record<Provider, string> = { anthropic: "claude-opus-5", op
 const flowGenerator = env("FLOW_GENERATOR", "anthropic") as Provider | "stub";
 const tagProvider = env("TAG_PROVIDER", flowGenerator === "stub" ? "anthropic" : flowGenerator) as Provider;
 const r2Bucket = env("R2_BUCKET");
+const posthogHost = env("POSTHOG_HOST");
+
+function posthogAssetHost(host: string): string {
+  try {
+    const url = new URL(host);
+    url.hostname = url.hostname.replace(".i.posthog.com", "-assets.i.posthog.com");
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
 
 export const config = {
   port: int("PORT", 8787),
   dataDir,
+  posthog: {
+    projectToken: env("POSTHOG_PROJECT_TOKEN"),
+    host: posthogHost,
+    assetHost: posthogAssetHost(posthogHost),
+    isDevelopment: env("NODE_ENV") !== "production",
+  },
   indexDbPath: resolve(env("INDEX_DB", `${dataDir}/skills.db`)),
   jobsDbPath: resolve(env("JOBS_DB", `${dataDir}/jobs.db`)),
 

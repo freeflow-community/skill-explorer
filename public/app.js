@@ -1,4 +1,6 @@
 // Skills Explorer front end: a small hash-routed app over the JSON API.
+import { initializePosthog } from "./posthog.js";
+
 const app = document.getElementById("app");
 const qInput = document.getElementById("q");
 let routeId = 0; // bumps on every navigation so stale polls and timers stop
@@ -10,6 +12,15 @@ let serverConfig = { flowModel: "", buildRequiresToken: false };
 function track(event, fields = {}) {
   try {
     (window.dataLayer = window.dataLayer || []).push({ event, ...fields });
+  } catch {
+    // Analytics must never break the page.
+  }
+}
+
+/** Capture product actions when the optional browser SDK has initialized. */
+function capture(event, properties = {}) {
+  try {
+    window.posthog?.capture(event, properties);
   } catch {
     // Analytics must never break the page.
   }
@@ -269,6 +280,7 @@ async function startBuild(s, btn, myRoute) {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
+    capture("visual_flow_build_requested", { build_type: btn.textContent.trim() === "Rebuild" ? "rebuild" : "initial" });
     renderFlow(s, d.flow, myRoute);
   } catch (e) {
     btn.disabled = false;
@@ -318,7 +330,11 @@ async function pollFlow(s, myRoute, lastState) {
       if (p) p.textContent = st.job.progress || "";
       return pollFlow(s, myRoute, lastState);
     }
-    if (st.state === "ready") toast("The visual flow is ready");
+    if (st.state === "ready") {
+      capture("visual_flow_build_completed", { previous_state: lastState });
+      toast("The visual flow is ready");
+    }
+    if (st.state === "failed") capture("visual_flow_build_failed", { previous_state: lastState });
     renderFlow(s, st, myRoute); // re-renders on queued → running too, which starts the next poll
   } catch {
     pollFlow(s, myRoute, lastState); // transient network error: keep polling
@@ -370,8 +386,17 @@ document.getElementById("searchForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const q = qInput.value.trim();
   track("search", { search_term: q });
+  capture("search_performed", { has_query: Boolean(q), query_length: q.length });
   location.hash = `#/search?q=${enc(q)}`;
 });
 window.addEventListener("hashchange", route);
 
-api("/api/config").then((c) => (serverConfig = c)).catch(() => {}).finally(route);
+// The page must render even when config or analytics fail, so nothing here is fatal.
+api("/api/config")
+  .then(async (c) => {
+    serverConfig = c;
+    // Unconfigured PostHog throws in development on purpose; log it rather than blanking the page.
+    await initializePosthog(c.posthog).catch((e) => console.warn("PostHog not initialized:", e.message));
+  })
+  .catch(() => {})
+  .finally(route);
