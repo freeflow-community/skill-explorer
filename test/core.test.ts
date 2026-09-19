@@ -53,6 +53,9 @@ test("search matches name and description, name first, and filters by tag", () =
   assert.deepEqual(index.search("review").map((s) => s.slug)[0], "review-pr");
   assert.deepEqual(index.search("", { tag: "QA" }).map((s) => s.slug), ["review-pr"]);
   assert.deepEqual(index.search("100%"), []);
+  assert.deepEqual(index.search("", { repo: "https://github.com/acme/skills" }).map((s) => s.slug), ["review-pr"]);
+  assert.equal(index.countByRepo("https://github.com/acme/skills"), 1);
+  assert.equal(index.countByRepo("https://github.com/nobody/nothing"), 0);
   assert.deepEqual(index.tagCounts().map((t) => t.tag).sort(), ["agents", "aws", "github", "qa"]);
   assert.equal(index.renameTag("qa", "GitHub"), 1);
   assert.deepEqual(index.getBySlug("review-pr")!.tags, ["github"]);
@@ -225,6 +228,9 @@ test("HTTP API: stars, popular tab and favourites lookup", async () => {
 
   const detail = await (await app.request("/api/skills/review-pr")).json();
   assert.equal(detail.stars, 1);
+  assert.equal(detail.repoSkillCount, 1);
+  const byRepo = await (await app.request(`/api/search?repo=${encodeURIComponent("https://github.com/acme/cloud-agents")}`)).json();
+  assert.deepEqual(byRepo.results.map((s: { slug: string }) => s.slug), ["provision-cloud-agent"]);
 
   const favs = await (await app.request("/api/skills?slugs=review-pr,gone,provision-cloud-agent")).json();
   assert.deepEqual(favs.results.map((s: { slug: string }) => s.slug), ["review-pr", "provision-cloud-agent"]);

@@ -208,7 +208,7 @@ export class SkillIndex {
   }
 
   /** Every term must appear in the name or description; name matches rank first. */
-  search(q: string, opts: { tag?: string; collection?: string; limit?: number } = {}): Skill[] {
+  search(q: string, opts: { tag?: string; collection?: string; repo?: string; limit?: number } = {}): Skill[] {
     const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const where: string[] = [];
     const params: (string | number)[] = [];
@@ -224,6 +224,10 @@ export class SkillIndex {
       where.push("s.collection = ?");
       params.push(opts.collection);
     }
+    if (opts.repo) {
+      where.push("s.repo_url = ?");
+      params.push(opts.repo);
+    }
     const phrase = terms.join(" ");
     const sql = `${SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY CASE
@@ -235,6 +239,11 @@ export class SkillIndex {
       LIMIT ?`;
     params.push(phrase, phrase, `${phrase.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, likeTerm(terms[0] ?? ""), opts.limit ?? 100);
     return (this.db.prepare(sql).all(...params) as Row[]).map(toSkill);
+  }
+
+  /** How many skills the index holds from one repository. */
+  countByRepo(repoUrl: string): number {
+    return (this.db.prepare("SELECT count(*) AS n FROM skills WHERE repo_url = ?").get(repoUrl) as { n: number }).n;
   }
 
   tagCounts(): { tag: string; count: number }[] {

@@ -130,6 +130,9 @@ function excerpt(text, max = 200) {
   return `${t.slice(0, t.lastIndexOf(" ", max) > 0 ? t.lastIndexOf(" ", max) : max).replace(/[,;:\s]+$/, "")}…`;
 }
 
+const repoLabel = (url) => String(url).replace("https://github.com/", "");
+const repoLink = (url, text) => `<a href="#/search?repo=${enc(url)}">${esc(text ?? repoLabel(url))}</a>`;
+
 const tagChips = (tags) => (tags.length ? `<div class="chips">${tags.map((t) => `<a class="chip" href="#/search?tag=${enc(t)}">${esc(t)}</a>`).join("")}</div>` : "");
 const collChip = (c) => (c ? `<a class="coll" href="#/search?collection=${enc(c)}">${esc(c)}</a>` : "");
 
@@ -250,8 +253,9 @@ async function viewSearch(params) {
   const q = params.get("q") ?? "";
   const tag = params.get("tag") ?? "";
   const collection = params.get("collection") ?? "";
+  const repo = params.get("repo") ?? "";
   qInput.value = q;
-  const d = await api(`/api/search?q=${enc(q)}&tag=${enc(tag)}&collection=${enc(collection)}`);
+  const d = await api(`/api/search?q=${enc(q)}&tag=${enc(tag)}&collection=${enc(collection)}&repo=${enc(repo)}`);
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const without = (key) => {
     const p = new URLSearchParams(params);
@@ -262,8 +266,9 @@ async function viewSearch(params) {
     q && `<span class="filter">matching “${esc(q)}”<a href="${without("q")}" aria-label="Clear search">×</a></span>`,
     tag && `<span class="filter">tag <strong>${esc(tag)}</strong><a href="${without("tag")}" aria-label="Remove tag filter">×</a></span>`,
     collection && `<span class="filter">collection <strong>${esc(collection)}</strong><a href="${without("collection")}" aria-label="Remove collection filter">×</a></span>`,
+    repo && `<span class="filter">repo <strong>${esc(repoLabel(repo))}</strong><a href="${without("repo")}" aria-label="Remove repository filter">×</a></span>`,
   ].filter(Boolean);
-  const title = q || tag || collection ? `${d.results.length} result${d.results.length === 1 ? "" : "s"}` : "All skills";
+  const title = q || tag || collection || repo ? `${d.results.length} result${d.results.length === 1 ? "" : "s"}` : "All skills";
   app.innerHTML = `
     <section class="intro"><span class="eyebrow">Search</span><h1>${title}</h1>
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
@@ -296,9 +301,10 @@ async function viewSkill(slug, params = new URLSearchParams()) {
       <div class="title-row"><h1>${esc(s.name)}</h1>${starButton(s.slug, d.stars ?? 0)}</div>
       ${s.description ? `<p class="desc">${esc(s.description)}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
       ${tagChips(s.tags)}
+      ${d.repoSkillCount > 1 ? `<p class="sibling">Part of <strong>${esc(repoName)}</strong> — ${repoLink(s.repoUrl, `see all ${d.repoSkillCount} skills from this repository`)}</p>` : ""}
     </section>
     <dl class="meta">
-      <div><dt>Repository</dt><dd><a href="${esc(s.repoUrl)}" target="_blank" rel="noopener">${esc(repoName)}</a></dd></div>
+      <div><dt>Repository</dt><dd>${repoLink(s.repoUrl, repoName)} <a class="out" href="${esc(s.repoUrl)}" target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open ${esc(repoName)} on GitHub">↗</a></dd></div>
       <div><dt>Path</dt><dd><a class="mono" href="${esc(d.links.skillMd)}" target="_blank" rel="noopener">${esc(s.path ? `${s.path}/SKILL.md` : "SKILL.md")}</a></dd></div>
       <div><dt>Branch</dt><dd class="mono">${esc(s.repoRef)}</dd></div>
       <div><dt>Collection</dt><dd>${s.collection ? collChip(s.collection) : `<span class="muted">None</span>`}</dd></div>

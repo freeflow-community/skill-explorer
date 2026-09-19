@@ -138,7 +138,8 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const q = c.req.query("q") ?? "";
     const tag = c.req.query("tag") || undefined;
     const collection = c.req.query("collection") || undefined;
-    return c.json({ q, tag, collection, results: idx().search(q, { tag, collection }) });
+    const repo = c.req.query("repo") || undefined;
+    return c.json({ q, tag, collection, repo, results: idx().search(q, { tag, collection, repo }) });
   });
 
   app.get("/api/tags", (c) => c.json(idx().tagCounts()));
@@ -164,7 +165,13 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   app.get("/api/skills/:slug", async (c) => {
     const skill = idx().getBySlug(c.req.param("slug"));
     if (!skill) return c.json({ error: "No skill with that name is in the index" }, 404);
-    return c.json({ skill, links: skillLinks(skill), flow: await flows.status(skill.slug), stars: stars.get(skill.slug) });
+    return c.json({
+      skill,
+      links: skillLinks(skill),
+      flow: await flows.status(skill.slug),
+      stars: stars.get(skill.slug),
+      repoSkillCount: idx().countByRepo(skill.repoUrl),
+    });
   });
 
   app.get("/api/skills/:slug/flow", async (c) => {
