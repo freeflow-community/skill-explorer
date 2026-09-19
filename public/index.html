@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Skills Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gabarito:wght@600;700;800&family=Atkinson+Hyperlegible+Next:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-inner">
+      <a class="wordmark" href="#/">Skills <span>Explorer</span></a>
+      <form class="search" id="searchForm" role="search">
+        <label class="sr" for="q">Search skills</label>
+        <input id="q" name="q" type="search" placeholder="Search skills by name or description" autocomplete="off">
+        <button type="submit" class="btn">Search</button>
+      </form>
+    </div>
+  </header>
+  <main id="app" class="wrap" tabindex="-1"></main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
