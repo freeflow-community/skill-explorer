@@ -7,7 +7,11 @@ import { SkillIndex, type Skill } from "./db.ts";
 import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
+import { createLogger, ms } from "./log.ts";
 import { getStore, type BlobStore } from "./storage.ts";
+
+const log = createLogger("server");
+const indexLog = createLogger("index");
 
 /** Holds the open (read-only) index and swaps it when a newer copy appears in storage. */
 export class IndexHolder {
@@ -27,7 +31,7 @@ export class IndexHolder {
   async refreshFrom(store: BlobStore): Promise<boolean> {
     if (!(await remoteIsNewer(store, this.dbPath))) return false;
     if (await hasUnpushedChanges(this.dbPath)) {
-      console.warn("index: storage has a newer index, but the local file has unpushed edits; keeping the local file");
+      indexLog.warn("storage has a newer index, but the local file has unpushed edits; keeping the local file");
       return false;
     }
     this.index.close();
@@ -36,7 +40,7 @@ export class IndexHolder {
     } finally {
       this.index = new SkillIndex(this.dbPath, { readOnly: true });
     }
-    console.log("index: pulled a newer index from storage");
+    indexLog.info("pulled a newer index from storage", { skills: this.index.count() });
     return true;
   }
 }
@@ -78,8 +82,21 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   const idx = () => index.current;
 
   app.onError((err, c) => {
-    console.error(err);
+    log.error("request failed", { method: c.req.method, path: c.req.path, error: err });
     return c.json({ error: err.message }, 500);
+  });
+
+  // Request log. Status polls and static files are routine, so they only show at LOG_LEVEL=debug.
+  app.use("*", async (c, next) => {
+    const t = performance.now();
+    await next();
+    const path = c.req.path;
+    const routine =
+      (c.req.method === "GET" && /^\/api\/skills\/[^/]+\/flow$/.test(path)) || !(path.startsWith("/api/") || path.startsWith("/flows/"));
+    const fields = { method: c.req.method, path, status: c.res.status, ms: ms(t) };
+    if (c.res.status >= 500) log.error("request", fields);
+    else if (routine) log.debug("request", fields);
+    else log.info("request", fields);
   });
 
   app.get("/api/config", (c) =>
@@ -91,14 +108,19 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     }),
   );
 
-  app.get("/api/home", (c) =>
-    c.json({
+  app.get("/api/home", async (c) => {
+    // The example flow is only advertised once it has actually been built.
+    const slug = config.exampleFlowSlug;
+    const skill = slug ? idx().getBySlug(slug) : null;
+    const flow = skill ? await flows.getMeta(skill.slug) : null;
+    return c.json({
       recent: idx().recent(12),
       tags: idx().tagCounts(),
       collections: idx().collections(),
       total: idx().count(),
-    }),
-  );
+      example: skill && flow ? { slug: skill.slug, name: skill.name, description: skill.description, model: flow.model, builtAt: flow.builtAt } : null,
+    });
+  });
 
   app.get("/api/search", (c) => {
     const q = c.req.query("q") ?? "";
@@ -149,20 +171,24 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
 async function main() {
   const store = getStore();
   const source = await ensureLocalIndex(store);
-  console.log(`index: ${config.indexDbPath} (${source}); storage: ${store.name}`);
   const index = new IndexHolder(config.indexDbPath);
+  indexLog.info("opened index", { path: config.indexDbPath, source, skills: index.current.count(), storage: store.name });
   const generator = createGenerator();
+  log.info("flow builds configured", {
+    provider: config.flow.generator, model: generator.model, effort: config.flow.effort,
+    maxTokens: config.flow.maxTokens, concurrency: config.flow.concurrency, buildToken: !!config.flow.buildToken,
+  });
   const flows = new FlowService({ store, generator, findSkill: (slug) => index.current.getBySlug(slug) });
 
   if (config.indexRefreshSeconds > 0) {
     setInterval(() => {
-      index.refreshFrom(store).catch((e) => console.error("index refresh failed:", e.message));
+      index.refreshFrom(store).catch((e) => indexLog.error("refresh from storage failed", { error: e }));
     }, config.indexRefreshSeconds * 1000).unref();
   }
 
   const app = createApp({ index, flows, generator });
   serve({ fetch: app.fetch, port: config.port }, (info) => {
-    console.log(`Skills Explorer on http://localhost:${info.port}  (flows: ${config.flow.generator}, model ${generator.model})`);
+    log.info(`Skills Explorer on http://localhost:${info.port}`, { logLevel: process.env.LOG_LEVEL ?? "info" });
   });
 }
 

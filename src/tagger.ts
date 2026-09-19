@@ -17,7 +17,22 @@ const TagsOutput = z.object({
 export async function suggestTags(
   skills: { name: string; description: string }[],
   vocabulary: string[],
+  batchSize = 40,
 ): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const vocab = new Set(vocabulary);
+  // Batches keep each request small; tags from earlier batches join the vocabulary so later ones reuse them.
+  for (let i = 0; i < skills.length; i += batchSize) {
+    const batch = await suggestBatch(skills.slice(i, i + batchSize), [...vocab]);
+    for (const [name, tags] of batch) {
+      out.set(name, tags);
+      tags.forEach((t) => vocab.add(t));
+    }
+  }
+  return out;
+}
+
+async function suggestBatch(skills: { name: string; description: string }[], vocabulary: string[]): Promise<Map<string, string[]>> {
   const prompt = [
     "Tag each agent skill below for a browsable skills catalog.",
     "Give each skill 3 to 6 short lowercase tags (kebab-case, one or two words) describing its domain,",

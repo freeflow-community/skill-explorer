@@ -55,6 +55,8 @@ export const config = {
     sourceBudget: int("FLOW_SOURCE_BUDGET", 300_000),
   },
 
+  /** Skill whose flow the home page shows as an example (empty disables the promo). */
+  exampleFlowSlug: env("EXAMPLE_FLOW_SLUG", "canvas-design"),
   tagProvider,
   tagModel: env("TAG_MODEL", DEFAULT_MODEL[tagProvider]),
   githubToken: env("GITHUB_TOKEN", env("GH_TOKEN")),

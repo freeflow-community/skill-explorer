@@ -76,6 +76,8 @@ Derive every colour and type decision from that plan.
 
 **Show the page at rest.** Everything is visible on load. Nothing waits at `opacity: 0` for a scroll observer, and there's no `100vh` hero.
 
+**The script must run.** A single JavaScript syntax error stops the whole script and leaves the page blank below the header, and the build is rejected. When you build HTML inside JavaScript template literals (backtick strings), never use Markdown backticks for inline code in the text: write `<code>GIFBuilder</code>`, not a backticked name, and escape any literal backtick as `\``. Also escape `${` that should appear literally, and never let the text `</script>` appear inside a script. Prefer keeping long static prose in the HTML rather than in script strings.
+
 **Build cleanly.** Close every element and double-quote attributes. Give keyboard focus a visible state, respect `prefers-reduced-motion`, give every form control a stable `id` and a `<label>`, and use real `<button>`s for actions. Escape any user-typed value before inserting it into HTML. Watch selector specificity so rules don't cancel each other.
 
 **Writing the copy.** Write from the reader's side of the screen. Name things by what people recognise, and use active voice. Buttons say exactly what they do ("Copy command", then a "Copied" toast). Warnings say what's wrong and how to fix it. Keep sentences short, specific and plain. Explain jargon the first time it appears unless the skill's audience obviously knows it.

@@ -2,7 +2,7 @@
   "name": "skills-explorer",
   "version": "1.0.0",
   "scripts": {
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "LOG_LEVEL=warn node --test \"test/**/*.test.ts\"",
     "start": "node src/server.ts",
     "dev": "node --watch src/server.ts",
     "cli": "node src/cli.ts",
@@ -24,6 +24,6 @@
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.2"
   }
 }

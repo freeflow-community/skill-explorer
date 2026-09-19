@@ -2,7 +2,18 @@
 const app = document.getElementById("app");
 const qInput = document.getElementById("q");
 let routeId = 0; // bumps on every navigation so stale polls and timers stop
+let pendingAnchor = null; // element to scroll to after the route renders
+let anchorRetry = 0; // the flow iframe loads late, so a requested anchor is re-applied when it resizes
 let serverConfig = { flowModel: "", buildRequiresToken: false };
+
+/** Push an event to Google Tag Manager's dataLayer (a no-op if GTM is blocked). */
+function track(event, fields = {}) {
+  try {
+    (window.dataLayer = window.dataLayer || []).push({ event, ...fields });
+  } catch {
+    // Analytics must never break the page.
+  }
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const enc = encodeURIComponent;
@@ -78,6 +89,17 @@ function card(s) {
   </article>`;
 }
 
+function examplePromo(ex) {
+  return `<a class="promo" href="#/skill/${enc(ex.slug)}?flow">
+    <div class="promo-text">
+      <span class="eyebrow">Example visual flow</span>
+      <h2>${esc(ex.name)}</h2>
+      <p>See what Claude builds from a skill: an interactive walkthrough with the skill's own setup choices, stages, commands and checklists. Built with <span class="mono">${esc(ex.model)}</span>.</p>
+    </div>
+    <span class="btn primary" aria-hidden="true">Open the flow</span>
+  </a>`;
+}
+
 function tagCloud(tags) {
   if (!tags.length) return `<p class="muted">No tags yet.</p>`;
   const max = Math.max(...tags.map((t) => t.count));
@@ -106,6 +128,7 @@ async function viewHome() {
     </section>
     <div class="home">
       <section class="section">
+        ${d.example ? examplePromo(d.example) : ""}
         <div class="section-head"><h2>New in the index</h2><a href="#/search">Browse all</a></div>
         <div class="cards">${d.recent.map(card).join("")}</div>
       </section>
@@ -148,7 +171,7 @@ async function viewSearch(params) {
       : `<div class="empty"><h2>No skills match</h2><p class="muted">Search looks at skill names and descriptions. Try fewer or shorter words, or remove a filter.</p><a class="btn" href="#/">Back to the index</a></div>`}`;
 }
 
-async function viewSkill(slug) {
+async function viewSkill(slug, params = new URLSearchParams()) {
   const myRoute = routeId;
   let d;
   try {
@@ -179,6 +202,8 @@ async function viewSkill(slug) {
     </dl>
     <section class="flow" id="flow" aria-live="polite"></section>`;
   renderFlow(s, d.flow, myRoute);
+  // #/skill/<slug>?flow links straight to the visual flow; the router scrolls there once it's done.
+  if (params.has("flow")) pendingAnchor = "flow";
 }
 
 /* ---------------- visual flow panel ---------------- */
@@ -187,6 +212,7 @@ let frameEl = null;
 window.addEventListener("message", (e) => {
   if (frameEl && e.source === frameEl.contentWindow && e.data?.type === "skills-explorer:flow-height") {
     frameEl.style.height = `${Math.max(480, Math.min(Number(e.data.height) || 0, 20000)) + 2}px`;
+    if (anchorRetry === routeId && window.scrollY < 40) scrollToAnchor("flow");
   }
 });
 
@@ -201,7 +227,8 @@ function renderFlow(s, st, myRoute) {
   if (!el || myRoute !== routeId) return;
   frameEl = null;
   const model = serverConfig.flowModel;
-  const head = (right = "") => `<div class="flow-head"><div><h2>Visual flow</h2>${right}</div>`;
+  const head = (right = "") =>
+    `<div class="flow-head"><div><h2>Visual flow<a class="anchor" href="#/skill/${enc(s.slug)}?flow" title="Link to this skill's visual flow" aria-label="Link to this skill's visual flow">#</a></h2>${right}</div>`;
   const buildBtn = (label, primary) => `<button type="button" class="btn ${primary ? "primary" : ""}" data-build>${label}</button>`;
 
   if (st.state === "queued" || st.state === "running") {
@@ -210,6 +237,7 @@ function renderFlow(s, st, myRoute) {
       <div class="flow-empty"><div class="building"><span class="spinner" aria-hidden="true"></span>
         <div><strong>${st.state === "queued" ? "Waiting to start…" : "Building the visual flow…"}</strong>
         <p class="muted">Reading this skill's files from GitHub and generating the page with <span class="mono">${esc(st.job.model)}</span>. This usually takes a few minutes. You can leave this page and come back.</p>
+        <p class="progress" id="progress">${esc(st.job.progress || "")}</p>
         <p class="muted">Elapsed: <span class="elapsed" id="elapsed">0:00</span></p></div></div></div>
       ${st.flow ? `<p class="flow-meta">The previous version is shown below until the new one is ready.</p>${flowFrame(s, st.flow)}` : ""}`;
     tickElapsed(since, myRoute);
@@ -237,6 +265,7 @@ function renderFlow(s, st, myRoute) {
 
 async function startBuild(s, btn, myRoute) {
   btn.disabled = true;
+  track("flow_build_started", { skill: s.slug, rebuild: btn.textContent.trim() === "Rebuild" });
   const token = storage("se-build-token");
   try {
     const d = await api(`/api/skills/${enc(s.slug)}/flow`, {
@@ -286,13 +315,23 @@ async function pollFlow(s, myRoute, lastState) {
   try {
     const st = await api(`/api/skills/${enc(s.slug)}/flow`);
     if (myRoute !== routeId) return;
-    // Same in-progress state: keep the current view (and its elapsed timer) and poll again.
-    if (st.state === lastState && (st.state === "queued" || st.state === "running")) return pollFlow(s, myRoute, lastState);
+    // Same in-progress state: keep the current view (and its elapsed timer), refresh the progress line, poll again.
+    if (st.state === lastState && (st.state === "queued" || st.state === "running")) {
+      const p = document.getElementById("progress");
+      if (p) p.textContent = st.job.progress || "";
+      return pollFlow(s, myRoute, lastState);
+    }
     if (st.state === "ready") toast("The visual flow is ready");
     renderFlow(s, st, myRoute); // re-renders on queued → running too, which starts the next poll
   } catch {
     pollFlow(s, myRoute, lastState); // transient network error: keep polling
   }
+}
+
+function scrollToAnchor(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
 }
 
 /* ---------------- router ---------------- */
@@ -306,18 +345,34 @@ async function route() {
   const params = new URLSearchParams(query);
   if (!path.startsWith("/search")) qInput.value = "";
   try {
-    if (path.startsWith("/skill/")) await viewSkill(decodeURIComponent(path.slice("/skill/".length)));
+    if (path.startsWith("/skill/")) await viewSkill(decodeURIComponent(path.slice("/skill/".length)), params);
     else if (path.startsWith("/search")) await viewSearch(params);
     else await viewHome();
   } catch (e) {
     app.innerHTML = `<div class="note bad"><strong>Something went wrong loading this page.</strong> ${esc(e.message)}</div>`;
   }
-  window.scrollTo({ top: 0 });
+  const anchorId = pendingAnchor;
+  pendingAnchor = null;
+  if (anchorId) {
+    anchorRetry = routeId;
+    scrollToAnchor(anchorId);
+    // The page is often too short to scroll until the flow iframe has loaded; try again when it has.
+    setTimeout(() => anchorRetry === routeId && scrollToAnchor(anchorId), 1200);
+  } else {
+    window.scrollTo({ top: 0 });
+  }
+  // Routes change the #hash, which GTM's built-in page view doesn't see, so report each one.
+  track("virtual_page_view", {
+    page_path: `${location.pathname}${location.hash}`,
+    page_location: location.href,
+    page_title: document.title,
+  });
 }
 
 document.getElementById("searchForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const q = qInput.value.trim();
+  track("search", { search_term: q });
   location.hash = `#/search?q=${enc(q)}`;
 });
 window.addEventListener("hashchange", route);

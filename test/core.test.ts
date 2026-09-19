@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { SkillIndex } from "../src/db.ts";
 import { extractHtml, StubFlowGenerator } from "../src/flows/generator.ts";
 import { FlowService } from "../src/flows/jobs.ts";
-import { guessCollection, parseRepo, parseSkillMd } from "../src/github.ts";
+import { validateFlowHtml } from "../src/flows/validate.ts";
+import { guessCollection, isSkillPath, parseRepo, parseSkillMd } from "../src/github.ts";
 import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../src/indexSync.ts";
 import { createApp, IndexHolder } from "../src/server.ts";
 import { LocalBlobStore } from "../src/storage.ts";
@@ -52,6 +53,10 @@ test("search matches name and description, name first, and filters by tag", () =
   assert.deepEqual(index.search("", { tag: "QA" }).map((s) => s.slug), ["review-pr"]);
   assert.deepEqual(index.search("100%"), []);
   assert.deepEqual(index.tagCounts().map((t) => t.tag).sort(), ["agents", "aws", "github", "qa"]);
+  assert.equal(index.renameTag("qa", "GitHub"), 1);
+  assert.deepEqual(index.getBySlug("review-pr")!.tags, ["github"]);
+  assert.equal(index.renameTag("aws", null), 1);
+  assert.deepEqual(index.tagCounts().map((t) => t.tag).sort(), ["agents", "github"]);
 });
 
 test("parseRepo handles the common forms", () => {
@@ -69,10 +74,57 @@ test("parseSkillMd reads folded YAML descriptions", () => {
   assert.equal(guessCollection("plugins/slack/skills/digest/SKILL.md"), "slack");
 });
 
+test("isSkillPath skips test fixtures and vendored dirs", () => {
+  assert.equal(isSkillPath("skills/pdf/SKILL.md"), true);
+  assert.equal(isSkillPath("SKILL.md"), true);
+  assert.equal(isSkillPath(".claude/skills/x/SKILL.md"), true);
+  assert.equal(isSkillPath("tests/fixtures/mcp_poisoned_tool/SKILL.md"), false);
+  assert.equal(isSkillPath("pkg/node_modules/x/SKILL.md"), false);
+  assert.equal(isSkillPath(".github/skills/x/SKILL.md"), true);
+  assert.equal(isSkillPath("skills/pdf/README.md"), false);
+  assert.equal(isSkillPath("plugins/a/SKILL.md", "skills"), false);
+});
+
 test("extractHtml strips fences and surrounding prose", () => {
   assert.equal(extractHtml("```html\n<!doctype html><html><body>x</body></html>\n```"), "<!doctype html><html><body>x</body></html>");
   assert.equal(extractHtml("Here:\n<!DOCTYPE html>\n<html></html> done"), "<!DOCTYPE html>\n<html></html>");
   assert.throws(() => extractHtml("<html><body>cut off"));
+});
+
+test("validateFlowHtml catches script syntax errors like stray backticks in template literals", () => {
+  const good = "<html><body><script>const x = `<p>Use <code>GIFBuilder</code></p>`;</script><script src=\"x.js\"></script></body></html>";
+  assert.deepEqual(validateFlowHtml(good), []);
+  const bad = "<html><body><script>\nconst x = `<p>the `GIFBuilder` helper</p>`;\n</script></body></html>";
+  const problems = validateFlowHtml(bad);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /syntax error .*GIFBuilder/);
+  assert.deepEqual(validateFlowHtml('<script type="application/json">{not js}</script>'), []);
+});
+
+test("a page that fails validation is regenerated once with feedback, then stored", async () => {
+  const dir = tmp();
+  const index = seed(join(dir, "i.db"));
+  const feedbackSeen: string[][] = [];
+  let calls = 0;
+  const generator = {
+    model: "fake",
+    async generate(_s: unknown, _src: unknown, opts: { feedback?: string[] } = {}) {
+      feedbackSeen.push(opts.feedback ?? []);
+      calls++;
+      const html = calls === 1 ? "<html><body><script>const a = `x `y` z`;</script></body></html>" : "<html><body><script>const a = 1;</script></body></html>";
+      return { html, model: "fake" };
+    },
+  };
+  const flows = new FlowService({
+    store: new LocalBlobStore(join(dir, "blobs")), generator, jobsDbPath: ":memory:",
+    findSkill: (s) => index.getBySlug(s), loadSources: async () => [{ path: "SKILL.md", content: "x" }],
+  });
+  const job = await flows.waitFor(flows.start("review-pr").id, 5);
+  assert.equal(job.status, "succeeded");
+  assert.equal(calls, 2);
+  assert.equal(feedbackSeen[0]!.length, 0);
+  assert.match(feedbackSeen[1]![0]!, /syntax error/);
+  assert.match((await flows.getHtml("review-pr"))!, /const a = 1/);
 });
 
 test("index sync: push, pull, unpushed edits and conflicts", async () => {

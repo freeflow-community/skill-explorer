@@ -1,5 +1,8 @@
 import { parse as parseYaml } from "yaml";
 import { config } from "./config.ts";
+import { createLogger, type Logger } from "./log.ts";
+
+const ghLog = createLogger("github");
 
 export interface RepoRef {
   owner: string;
@@ -53,7 +56,7 @@ export async function listTree(r: RepoRef, ref: string): Promise<TreeEntry[]> {
   const t = await gh<{ tree: TreeEntry[]; truncated: boolean }>(
     `/repos/${r.owner}/${r.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
   );
-  if (t.truncated) console.warn(`warning: GitHub truncated the file tree of ${r.owner}/${r.repo}; some skills may be missed`);
+  if (t.truncated) ghLog.warn("GitHub truncated the file tree; some files may be missed", { repo: `${r.owner}/${r.repo}`, ref });
   return t.tree;
 }
 
@@ -99,6 +102,22 @@ export function guessCollection(skillMdPath: string): string | null {
   return m ? m[1]! : null;
 }
 
+/** Directories whose SKILL.md files are test data or vendored copies, not skills the repo offers. */
+const IGNORED_DIRS = new Set([".git", "node_modules", "test", "tests", "__tests__", "fixtures", "__fixtures__", "testdata", "test-data"]);
+
+/** True for a SKILL.md path that should be indexed (optionally only under `subPath`). */
+export function isSkillPath(path: string, subPath?: string): boolean {
+  if (path !== "SKILL.md" && !path.endsWith("/SKILL.md")) return false;
+  const prefix = subPath ? `${subPath.replace(/\/$/, "")}/` : "";
+  if (prefix && !path.startsWith(prefix)) return false;
+  return !path.split("/").slice(0, -1).some((seg) => IGNORED_DIRS.has(seg));
+}
+
+/** Count indexable SKILL.md files without downloading them. */
+export async function countSkills(r: RepoRef, ref: string, subPath?: string): Promise<number> {
+  return (await listTree(r, ref)).filter((e) => e.type === "blob" && isSkillPath(e.path, subPath)).length;
+}
+
 export interface DiscoveredSkill {
   name: string;
   description: string;
@@ -108,20 +127,21 @@ export interface DiscoveredSkill {
 
 /** Find every SKILL.md in a repo (optionally under a sub-path) and read its frontmatter. */
 export async function discoverSkills(r: RepoRef, ref: string, subPath?: string): Promise<DiscoveredSkill[]> {
-  const prefix = subPath ? `${subPath.replace(/\/$/, "")}/` : "";
-  const files = (await listTree(r, ref)).filter(
-    (e) =>
-      e.type === "blob" &&
-      (e.path === "SKILL.md" || e.path.endsWith("/SKILL.md")) &&
-      (!prefix || e.path.startsWith(prefix) || e.path === `${prefix}SKILL.md`) &&
-      !e.path.split("/").some((seg) => seg === "node_modules" || seg.startsWith(".") && seg !== ".claude"),
-  );
+  const hidden = (p: string) => p.split("/").some((seg) => seg.startsWith("."));
+  // Visible paths first, so a skill also committed as an installed copy (e.g. .claude/skills/x) keeps its real location.
+  const files = (await listTree(r, ref))
+    .filter((e) => e.type === "blob" && isSkillPath(e.path, subPath))
+    .sort((a, b) => Number(hidden(a.path)) - Number(hidden(b.path)));
   const out: DiscoveredSkill[] = [];
+  const seen = new Set<string>();
   for (const f of files) {
     const { meta } = parseSkillMd(await fetchFile(r, ref, f.path));
     const dir = skillDir(f.path);
+    const name = String(meta.name ?? (dir.split("/").at(-1) || r.repo)).trim();
+    if (seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
     out.push({
-      name: String(meta.name ?? (dir.split("/").at(-1) || r.repo)).trim(),
+      name,
       description: String(meta.description ?? "").replace(/\s+/g, " ").trim(),
       path: dir,
       collection: guessCollection(f.path),
@@ -138,6 +158,7 @@ export async function fetchSkillSources(
   ref: string,
   dir: string,
   budget: number,
+  log?: Logger,
 ): Promise<{ path: string; content: string }[]> {
   const prefix = dir ? `${dir}/` : "";
   const skillMd = `${prefix}SKILL.md`;
@@ -149,10 +170,17 @@ export async function fetchSkillSources(
   const out: { path: string; content: string }[] = [];
   let used = 0;
   for (const e of entries) {
-    if ((e.size ?? 0) > 100_000 && e.path !== skillMd) continue;
-    if (used + (e.size ?? 0) > budget && e.path !== skillMd) continue;
+    if ((e.size ?? 0) > 100_000 && e.path !== skillMd) {
+      log?.info("skipping large file", { path: e.path, bytes: e.size });
+      continue;
+    }
+    if (used + (e.size ?? 0) > budget && e.path !== skillMd) {
+      log?.info("skipping file: over FLOW_SOURCE_BUDGET", { path: e.path, bytes: e.size, budget });
+      continue;
+    }
     const content = await fetchFile(r, ref, e.path);
     used += content.length;
+    log?.debug("fetched file", { path: e.path, chars: content.length });
     out.push({ path: e.path.slice(prefix.length) || e.path, content });
   }
   return out;

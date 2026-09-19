@@ -2,6 +2,8 @@
 
 A browsable index of agent skills (`SKILL.md` files) from GitHub, with an interactive **visual flow** for each skill, built on demand by an LLM (OpenAI or Anthropic, configurable).
 
+![A skill's visual flow: the MCP Server Blueprint page, with a workflow rail, setup pills and an overview of the stages](docs/hero.png)
+
 - **Home**: newest skills, a tag cloud, collections, and search (matches skill names and descriptions).
 - **Skill page**: name, description, repository, path, branch, collection and tags, then the skill's visual flow. If there's no flow yet, **Build visual flow** starts a background build, and the page shows a spinner and polls until the flow is ready.
 

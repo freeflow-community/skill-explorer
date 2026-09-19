@@ -158,6 +158,18 @@ export class SkillIndex {
     this.touch();
   }
 
+  /** Rename (or, with no new name, delete) a tag on every skill, merging into the new tag if it exists. Returns skills affected. */
+  renameTag(from: string, to: string | null): number {
+    const old = normalizeTag(from);
+    const next = to ? normalizeTag(to) : null;
+    if (next && next !== old) {
+      this.db.prepare("INSERT OR IGNORE INTO skill_tags (skill_id, tag) SELECT skill_id, ? FROM skill_tags WHERE tag = ?").run(next, old);
+    }
+    const affected = Number(this.db.prepare("DELETE FROM skill_tags WHERE tag = ?").run(old).changes);
+    this.touch();
+    return affected;
+  }
+
   setCollection(id: number, collection: string | null): void {
     this.db.prepare("UPDATE skills SET collection = ?, updated_at = ? WHERE id = ?").run(collection, this.now(), id);
     this.touch();

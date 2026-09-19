@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { config } from "./config.ts";
 import { SkillIndex, normalizeTag, type Skill } from "./db.ts";
 import { createGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
-import { defaultBranch, discoverSkills, parseRepo, repoUrl } from "./github.ts";
+import { countSkills, defaultBranch, discoverSkills, parseRepo, repoUrl } from "./github.ts";
 import { SyncConflictError, ensureLocalIndex, hasUnpushedChanges, pullIndex, pushIndex, readSyncState, remoteIsNewer } from "./indexSync.ts";
 import { getStore } from "./storage.ts";
 import { suggestTags } from "./tagger.ts";
@@ -14,6 +15,9 @@ const HELP = `Skills Explorer index tool
 Usage: npm run cli -- <command> [options]
 
   register <repo> [<repo>...]   Find every SKILL.md in each GitHub repo and add or update it in the index
+      --from-file <path>        Also read repos from a file: a CSV with a "repo" or "url" column, or one per line
+      --max-skills <n>          Skip repos with more than n skills (see --allow-large)
+      --allow-large a/b,c/d     Repos exempt from --max-skills
       --collection <name>       Collection for all skills found (default: guessed from plugins/<name>/skills/...)
       --tags a,b,c              Tags to add to every skill found
       --auto-tags               Ask the tagging model (TAG_MODEL) to suggest tags for each skill
@@ -24,6 +28,7 @@ Usage: npm run cli -- <command> [options]
   list                          List every skill in the index
   show <slug>                   Show one skill
   tag <slug> +tag -tag ...      Add (+) or remove (-) tags
+  rename-tag <old> [<new>]      Rename a tag on every skill (merging into <new>), or delete it if <new> is omitted
   set <slug> --collection <c>   Set a skill's collection (--collection "" clears it)
   remove <slug>                 Remove a skill from the index
   sync status|pull|push         Compare, download or upload the index (push --force overwrites)
@@ -83,8 +88,21 @@ async function push(force: boolean): Promise<void> {
 
 const pushHint = () => console.log("\nThe index changed locally. Run `npm run cli -- sync push` to publish it.");
 
-async function register(repos: string[], v: Record<string, string | boolean | undefined>): Promise<void> {
+/** Repos from a CSV (first "repo" or "url" column) or a plain one-per-line list. */
+export function readRepoFile(path: string): string[] {
+  const lines = readFileSync(path, "utf8").split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith("#"));
+  const header = lines[0]!.split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  const col = header.findIndex((h) => h === "repo" || h === "url");
+  if (col < 0) return lines.map((l) => l.trim());
+  return lines.slice(1).map((l) => (l.split(",")[col] ?? "").trim().replace(/^"|"$/g, "")).filter(Boolean);
+}
+
+async function register(args: string[], v: Record<string, string | boolean | undefined>): Promise<void> {
+  const repos = [...args, ...(v["from-file"] ? readRepoFile(String(v["from-file"])) : [])];
   if (!repos.length) fail("give at least one GitHub repo, e.g. `register anthropics/skills`");
+  const maxSkills = v["max-skills"] !== undefined ? Number(v["max-skills"]) : Infinity;
+  const allowLarge = new Set(String(v["allow-large"] ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const skipped: string[] = [];
   ensureGithubToken();
   const index = await openIndex();
   let changed = false;
@@ -94,6 +112,14 @@ async function register(repos: string[], v: Record<string, string | boolean | un
       const ref = (v.ref as string) || r.ref || (await defaultBranch(r));
       const subPath = (v.path as string) || r.subPath;
       console.log(`\n${r.owner}/${r.repo} @ ${ref}${subPath ? ` › ${subPath}` : ""}`);
+      if (Number.isFinite(maxSkills) && !allowLarge.has(`${r.owner}/${r.repo}`.toLowerCase())) {
+        const n = await countSkills(r, ref, subPath);
+        if (n > maxSkills) {
+          console.log(`  Skipped: ${n} skills is more than --max-skills ${maxSkills}.`);
+          skipped.push(`${r.owner}/${r.repo} (${n})`);
+          continue;
+        }
+      }
       const found = await discoverSkills(r, ref, subPath);
       if (!found.length) {
         console.log("  No SKILL.md files found.");
@@ -129,6 +155,7 @@ async function register(repos: string[], v: Record<string, string | boolean | un
   } finally {
     index.close();
   }
+  if (skipped.length) console.log(`\nSkipped ${skipped.length} large repo(s): ${skipped.join(", ")}`);
   if (!changed) return;
   if (v.push) await push(false);
   else pushHint();
@@ -175,6 +202,9 @@ async function main(): Promise<void> {
       collection: { type: "string" },
       tags: { type: "string" },
       "auto-tags": { type: "boolean" },
+      "from-file": { type: "string" },
+      "max-skills": { type: "string" },
+      "allow-large": { type: "string" },
       path: { type: "string" },
       ref: { type: "string" },
       "dry-run": { type: "boolean" },
@@ -224,6 +254,13 @@ async function main(): Promise<void> {
         index.addTags(skill.id, add);
         index.removeTags(skill.id, remove);
         console.log(describe(index.getById(skill.id)!));
+        pushHint();
+        return;
+      }
+      case "rename-tag": {
+        if (!args[0]) fail("give the tag to rename, e.g. `rename-tag development-tools developer-tools`");
+        const n = index.renameTag(args[0], args[1] ?? null);
+        console.log(args[1] ? `Renamed "${args[0]}" to "${args[1]}" on ${n} skill(s).` : `Removed "${args[0]}" from ${n} skill(s).`);
         pushHint();
         return;
       }
