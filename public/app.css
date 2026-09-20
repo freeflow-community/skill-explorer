@@ -229,8 +229,6 @@ h2:hover .anchor, .anchor:focus-visible { opacity: 1; }
 .grade-A, .grade-B { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .grade-C { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .grade-D, .grade-F { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
-.grade-link { text-decoration: none; display: inline-flex; }
-.grade-link:hover .grade { filter: brightness(0.95); }
 .scorecard { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
 .scorecard h3 { font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
 .score-top { display: flex; align-items: center; gap: 14px; }

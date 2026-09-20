@@ -6,7 +6,7 @@ A browsable index of agent skills (`SKILL.md` files) from GitHub, with an intera
 
 - **Home**: newest skills, a tag cloud, collections, and search (matches skill names and descriptions).
 - **Skill page**: name, description, repository, path, branch, collection and tags, then the skill's safety box score and its visual flow. Each is built on demand by its own button (**Rate safety**, **Build visual flow**) as a background job; the page shows a spinner and polls until the result is ready.
-- **Safety box score**: a grade from A (minimal risk) to F (high risk) for what installing the skill lets an agent do, shown as a badge on cards and search results once rated. See [Safety box scores](#safety-box-scores).
+- **Safety box score**: a grade from A (minimal risk) to F (high risk) for what installing the skill lets an agent do, shown in a box score panel on the skill page once rated. See [Safety box scores](#safety-box-scores).
 
 ## Run it
 

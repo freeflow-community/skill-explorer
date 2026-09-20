@@ -110,12 +110,11 @@ function starButton(slug, count) {
     <span class="star-icon" aria-hidden="true">${on ? "★" : "☆"}</span><span class="star-count">${count ? count : ""}</span></button>`;
 }
 
-/** Small safety grade badge, shown wherever a skill is listed once it has been rated. */
-function gradeBadge(safety, slug) {
+/** Safety grade tile for the box score and its modal. */
+function gradeBadge(safety) {
   if (!safety) return "";
   const text = `Safety ${safety.grade}: ${safety.label}, ${safety.score}/100 risk points`;
-  const inner = `<span class="grade grade-${esc(safety.grade)}" title="${esc(text)}" aria-label="${esc(text)}">${esc(safety.grade)}</span>`;
-  return slug ? `<a class="grade-link" href="#/skill/${enc(slug)}?safety">${inner}</a>` : inner;
+  return `<span class="grade grade-${esc(safety.grade)}" title="${esc(text)}" aria-label="${esc(text)}">${esc(safety.grade)}</span>`;
 }
 
 /** Escape text, then wrap each search term in <mark>. */
@@ -152,7 +151,7 @@ function card(s) {
   // The card is a div (not a link) so its tag, collection and star controls stay separate targets.
   return `<article class="card">
     <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
-      <span class="card-right">${gradeBadge(s.safety, s.slug)}${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
+      <span class="card-right">${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
     ${s.description ? `<p class="desc">${esc(excerpt(s.description))}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
     <div class="foot">${tagChips(s.tags)}
       <span class="foot-right">${ownerChip(s.repoUrl)}<span class="date" title="${esc(fullDate(s.createdAt))}">added ${relTime(s.createdAt)}</span></span></div>
@@ -287,7 +286,7 @@ async function viewSearch(params) {
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
     ${d.results.length ? `<div class="results">${d.results
       .map((s) => `<a class="result" href="#/skill/${enc(s.slug)}">
-          <h3>${highlight(s.name, terms)}</h3><span class="card-right">${gradeBadge(s.safety)}${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
+          <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
           <div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<span class="owner-inline">${esc(repoLabel(s.repoUrl))}</span></div>
         </a>`).join("")}</div>`
