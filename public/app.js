@@ -6,7 +6,7 @@ const qInput = document.getElementById("q");
 let routeId = 0; // bumps on every navigation so stale polls and timers stop
 let pendingAnchor = null; // element to scroll to after the route renders
 let anchorRetry = 0; // the flow iframe loads late, so a requested anchor is re-applied when it resizes
-let serverConfig = { flowModel: "", buildRequiresToken: false };
+let serverConfig = { flowModel: "", scoreModel: "", buildRequiresToken: false };
 
 /** Push an event to Google Tag Manager's dataLayer (a no-op if GTM is blocked). */
 function track(event, fields = {}) {
@@ -110,6 +110,14 @@ function starButton(slug, count) {
     <span class="star-icon" aria-hidden="true">${on ? "★" : "☆"}</span><span class="star-count">${count ? count : ""}</span></button>`;
 }
 
+/** Small safety grade badge, shown wherever a skill is listed once it has been rated. */
+function gradeBadge(safety, slug) {
+  if (!safety) return "";
+  const text = `Safety ${safety.grade}: ${safety.label}, ${safety.score}/100 risk points`;
+  const inner = `<span class="grade grade-${esc(safety.grade)}" title="${esc(text)}" aria-label="${esc(text)}">${esc(safety.grade)}</span>`;
+  return slug ? `<a class="grade-link" href="#/skill/${enc(slug)}?safety">${inner}</a>` : inner;
+}
+
 /** Escape text, then wrap each search term in <mark>. */
 function highlight(text, terms) {
   let out = esc(text);
@@ -144,7 +152,7 @@ function card(s) {
   // The card is a div (not a link) so its tag, collection and star controls stay separate targets.
   return `<article class="card">
     <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
-      <span class="card-right">${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
+      <span class="card-right">${gradeBadge(s.safety, s.slug)}${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
     ${s.description ? `<p class="desc">${esc(excerpt(s.description))}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
     <div class="foot">${tagChips(s.tags)}
       <span class="foot-right">${ownerChip(s.repoUrl)}<span class="date" title="${esc(fullDate(s.createdAt))}">added ${relTime(s.createdAt)}</span></span></div>
@@ -193,7 +201,7 @@ async function viewHome() {
     <section class="intro">
       <span class="eyebrow">Index · <span class="count">${d.total}</span> skill${d.total > 1 ? "s" : ""}</span>
       <h1>Find a skill, then see how it works</h1>
-      <p class="lede">Browse agent skills from GitHub by tag or collection, or search by name and description. Each skill page can show a visual flow: an interactive walkthrough of the skill, built by Claude from its SKILL.md.</p>
+      <p class="lede">Browse agent skills from GitHub by tag or collection, or search by name and description. Each skill page can show a safety box score, a grade for what the skill and its scripts can reach, and a visual flow: an interactive walkthrough of the skill, built by Claude from its SKILL.md.</p>
     </section>
     <div class="home">
       <section class="section">
@@ -279,7 +287,7 @@ async function viewSearch(params) {
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
     ${d.results.length ? `<div class="results">${d.results
       .map((s) => `<a class="result" href="#/skill/${enc(s.slug)}">
-          <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
+          <h3>${highlight(s.name, terms)}</h3><span class="card-right">${gradeBadge(s.safety)}${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
           <div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<span class="owner-inline">${esc(repoLabel(s.repoUrl))}</span></div>
         </a>`).join("")}</div>`
@@ -301,6 +309,8 @@ async function viewSkill(slug, params = new URLSearchParams()) {
   document.title = `${s.name} · Skills Explorer`;
   app.innerHTML = `
     <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Index</a><span>/</span>${s.collection ? `<a href="#/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
+    <div class="detail-grid">
+    <div class="detail-main">
     <section class="detail-head">
       <span class="eyebrow">Skill</span>
       <div class="title-row"><h1>${esc(s.name)}</h1>${starButton(s.slug, d.stars ?? 0)}</div>
@@ -316,10 +326,152 @@ async function viewSkill(slug, params = new URLSearchParams()) {
       <div><dt>Added</dt><dd title="${esc(fullDate(s.createdAt))}">${relTime(s.createdAt)}</dd></div>
       <div><dt>Updated</dt><dd title="${esc(fullDate(s.updatedAt))}">${relTime(s.updatedAt)}</dd></div>
     </dl>
+    </div>
+    <aside class="boxscore" id="safety" aria-live="polite" aria-label="Safety box score"></aside>
+    </div>
     <section class="flow" id="flow" aria-live="polite"></section>`;
+  renderSafety(s, d.safety, myRoute);
   renderFlow(s, d.flow, myRoute);
-  // #/skill/<slug>?flow links straight to the visual flow; the router scrolls there once it's done.
+  // #/skill/<slug>?flow (or ?safety) links straight to that panel; the router scrolls there once it's done.
   if (params.has("flow")) pendingAnchor = "flow";
+  else if (params.has("safety")) pendingAnchor = "safety";
+}
+
+/* ---------------- safety box score panel ---------------- */
+
+const SEVERITY_ORDER = { high: 0, medium: 1, low: 2, info: 3 };
+
+function scorecard(r) {
+  const dots = (level) => `<span class="dots level-${level}" aria-label="level ${level} of 3">${[1, 2, 3].map((i) => `<i class="${i <= level ? "on" : ""}"></i>`).join("")}</span>`;
+  const findings = [...r.findings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+  const inv = r.inventory;
+  const kinds = Object.entries(inv.byKind).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ");
+  return `<div class="scorecard">
+    <div class="score-top">
+      ${gradeBadge(r)}
+      <div class="score-headline"><strong>${esc(r.label)}</strong><span class="muted">${r.score} / 100 risk points · grade ${esc(r.grade)}</span></div>
+    </div>
+    <p class="score-summary">${esc(r.summary)}</p>
+    <ul class="cats">${r.categories.map((c) => `<li class="cat level-${c.level}">
+        <div class="cat-head"><span class="cat-name">${esc(c.name)}</span>${dots(c.level)}</div>
+        <p class="cat-why">${esc(c.rationale)}</p></li>`).join("")}</ul>
+    ${findings.length ? `<h3>Findings</h3><ul class="findings">${findings.map((f) => `<li class="finding sev-${esc(f.severity)}">
+        <div class="finding-head"><span class="sev">${esc(f.severity)}</span><strong>${esc(f.title)}</strong>${f.file ? `<span class="mono finding-file">${esc(f.file)}</span>` : ""}</div>
+        <p>${esc(f.detail)}</p>${f.evidence ? `<code class="evidence">${esc(f.evidence)}</code>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No findings.</p>`}
+    ${r.beforeInstalling.length ? `<h3>Before you install</h3><ul class="checks">${r.beforeInstalling.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+    <details class="scan-details"><summary>Automated scan: ${r.scan.hits.length} signal${r.scan.hits.length === 1 ? "" : "s"} in ${inv.files} file${inv.files === 1 ? "" : "s"} (${esc(kinds)})</summary>
+      ${inv.scripts.length ? `<p class="muted">Native scripts: ${inv.scripts.map((p) => `<span class="mono">${esc(p)}</span>`).join(", ")}</p>` : `<p class="muted">No native scripts ship with this skill.</p>`}
+      ${inv.binaries.length ? `<p class="muted">Binaries (not readable): ${inv.binaries.map((p) => `<span class="mono">${esc(p)}</span>`).join(", ")}</p>` : ""}
+      ${inv.skipped.length ? `<p class="muted">Not read (size or budget): ${inv.skipped.map((p) => `<span class="mono">${esc(p)}</span>`).join(", ")}</p>` : ""}
+      ${r.scan.hits.length ? `<table class="hits"><thead><tr><th>Sev</th><th>Signal</th><th>Where</th><th>Line</th></tr></thead><tbody>${r.scan.hits.map((h) => `<tr class="sev-${h.severity}">
+        <td>${h.severity}</td><td>${esc(h.what)}</td><td class="mono">${esc(h.file)}:${h.line}</td><td><code>${esc(h.excerpt)}</code></td></tr>`).join("")}</tbody></table>` : ""}
+    </details>
+  </div>`;
+}
+
+/** Compact category rows for the box: name, dots. */
+function boxRows(r) {
+  const short = { execution: "Execution", network: "Network", filesystem: "Filesystem", secrets: "Secrets", privilege: "Privilege", injection: "Hijack surface", autonomy: "Irreversible", opacity: "Transparency" };
+  return `<ul class="box-rows">${r.categories.map((c) => `<li class="level-${c.level}" title="${esc(c.name)}: ${esc(c.rationale)}">
+      <span>${esc(short[c.key] || c.name)}</span>
+      <span class="dots" aria-label="level ${c.level} of 3">${[1, 2, 3].map((i) => `<i class="${i <= c.level ? "on" : ""}"></i>`).join("")}</span></li>`).join("")}</ul>`;
+}
+
+/** The full scorecard in a modal dialog. */
+function openSafetyModal(s, r) {
+  let dlg = document.getElementById("safetyModal");
+  if (!dlg) {
+    dlg = document.createElement("dialog");
+    dlg.id = "safetyModal";
+    dlg.className = "modal";
+    dlg.addEventListener("click", (e) => e.target === dlg && dlg.close());
+    document.body.appendChild(dlg);
+  }
+  dlg.innerHTML = `<div class="modal-head"><div><span class="eyebrow">Safety box score</span><h2>${esc(s.name)}</h2>
+      <p class="flow-meta">Rated ${relTime(r.ratedAt)} with <span class="mono">${esc(r.model)}</span> from ${r.sourceFiles.length} file${r.sourceFiles.length === 1 ? "" : "s"}</p></div>
+      <button type="button" class="btn modal-close" aria-label="Close" data-close>✕</button></div>
+    <div class="modal-body">${scorecard(r)}</div>`;
+  dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());
+  dlg.showModal();
+  capture("safety_detail_opened", { grade: r.grade });
+}
+
+function renderSafety(s, st, myRoute) {
+  const el = document.getElementById("safety");
+  if (!el || myRoute !== routeId) return;
+  const model = serverConfig.scoreModel;
+  const head = `<div class="box-head"><span class="eyebrow">Safety box score</span><a class="anchor" href="#/skill/${enc(s.slug)}?safety" title="Link to this skill's safety score" aria-label="Link to this skill's safety score">#</a></div>`;
+  const rateBtn = (label, primary) => `<button type="button" class="btn ${primary ? "primary" : ""} ${primary ? "" : "small"}" data-rate>${label}</button>`;
+  const summary = (r, extra = "") => `
+    <div class="box-grade">${gradeBadge(r)}<div><strong>${esc(r.label)}</strong><span class="muted">${r.score} / 100 risk points</span></div></div>
+    ${boxRows(r)}
+    <div class="box-actions"><button type="button" class="btn primary" data-detail>Detail</button>${extra}</div>`;
+
+  if (st.state === "queued" || st.state === "running") {
+    const since = st.job.startedAt || st.job.createdAt;
+    el.innerHTML = `${head}
+      <div class="building box-building"><span class="spinner" aria-hidden="true"></span>
+        <div><strong>${st.state === "queued" ? "Waiting to start…" : "Rating…"}</strong>
+        <p class="progress small" id="safetyProgress">${esc(st.job.progress || "")}</p>
+        <p class="muted small">Elapsed <span class="elapsed" id="safetyElapsed">0:00</span></p></div></div>
+      ${st.report ? `<p class="muted small">Previous rating, from ${relTime(st.report.ratedAt)}:</p>${summary(st.report)}` : ""}`;
+    tickElapsed(since, myRoute, "safetyElapsed");
+    pollSafety(s, myRoute, st.state);
+  } else if (st.state === "ready") {
+    const r = st.report;
+    el.innerHTML = `${head}${summary(r, rateBtn("Re-rate", false))}
+      <p class="muted small box-foot" title="${esc(r.model)}">Rated ${relTime(r.ratedAt)} from ${r.sourceFiles.length} file${r.sourceFiles.length === 1 ? "" : "s"}</p>`;
+  } else if (st.state === "failed") {
+    el.innerHTML = `${head}
+      <div class="note bad small"><strong>The last rating failed.</strong> ${esc(st.job.error || "No error message was recorded.")}</div>
+      <div class="box-actions">${rateBtn("Try again", true)}</div>
+      ${st.report ? `<p class="muted small">Previous rating, from ${relTime(st.report.ratedAt)}:</p>${summary(st.report)}` : ""}`;
+  } else {
+    el.innerHTML = `${head}
+      <p class="muted small">What installing this skill lets an agent do: eight categories from shell execution to secrets access, rated from its own files and scripts${model ? ` by <span class="mono">${esc(model)}</span>` : ""}. Takes a minute or two; saved for everyone.</p>
+      <div class="box-actions">${rateBtn("Request score", true)}</div>`;
+  }
+  el.querySelector("[data-rate]")?.addEventListener("click", (e) => startRating(s, e.currentTarget, myRoute));
+  const report = st.report;
+  el.querySelectorAll("[data-detail]").forEach((b) => b.addEventListener("click", () => openSafetyModal(s, report)));
+}
+
+async function startRating(s, btn, myRoute) {
+  btn.disabled = true;
+  const rerate = btn.textContent.trim() === "Re-rate";
+  track("safety_rating_started", { skill: s.slug, rerate });
+  const token = storage("se-build-token");
+  try {
+    const d = await api(`/api/skills/${enc(s.slug)}/safety`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    capture("safety_rating_requested", { rating_type: rerate ? "rerate" : "initial" });
+    renderSafety(s, d.safety, myRoute);
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status === 401) return askToken(s, btn, myRoute, () => startRating(s, btn, myRoute));
+    toast(`Couldn't start the rating: ${e.message}`);
+  }
+}
+
+async function pollSafety(s, myRoute, lastState) {
+  await new Promise((r) => setTimeout(r, 3000));
+  if (myRoute !== routeId) return;
+  try {
+    const st = await api(`/api/skills/${enc(s.slug)}/safety`);
+    if (myRoute !== routeId) return;
+    if (st.state === lastState && (st.state === "queued" || st.state === "running")) {
+      const p = document.getElementById("safetyProgress");
+      if (p) p.textContent = st.job.progress || "";
+      return pollSafety(s, myRoute, lastState);
+    }
+    if (st.state === "ready") {
+      capture("safety_rating_completed", { grade: st.report.grade });
+      toast(`Safety grade ${st.report.grade}: ${st.report.label}`);
+    }
+    if (st.state === "failed") capture("safety_rating_failed", { previous_state: lastState });
+    renderSafety(s, st, myRoute);
+  } catch {
+    pollSafety(s, myRoute, lastState);
+  }
 }
 
 /* ---------------- visual flow panel ---------------- */
@@ -397,8 +549,8 @@ async function startBuild(s, btn, myRoute) {
   }
 }
 
-function askToken(s, btn, myRoute) {
-  const el = document.getElementById("flow");
+function askToken(s, btn, myRoute, retry = () => startBuild(s, btn, myRoute)) {
+  const el = btn.closest("section") || document.getElementById("flow");
   if (el.querySelector(".token-row")) return;
   btn.insertAdjacentHTML("afterend", `<div class="token-row"><label for="buildToken" class="muted">This server needs a build token to start builds.</label>
     <input id="buildToken" type="password" placeholder="Paste the build token" autocomplete="off"><button type="button" class="btn primary" id="tokenGo">Build with this token</button></div>`);
@@ -408,18 +560,18 @@ function askToken(s, btn, myRoute) {
     if (!input.value.trim()) return;
     storage("se-build-token", input.value.trim());
     el.querySelector(".token-row").remove();
-    startBuild(s, btn, myRoute);
+    retry();
   };
   document.getElementById("tokenGo").addEventListener("click", go);
   input.addEventListener("keydown", (e) => e.key === "Enter" && go());
 }
 
-let elapsedTimer;
-function tickElapsed(since, myRoute) {
-  clearInterval(elapsedTimer);
+const elapsedTimers = {};
+function tickElapsed(since, myRoute, id = "elapsed") {
+  clearInterval(elapsedTimers[id]);
   const start = new Date(since).getTime();
-  const t = (elapsedTimer = setInterval(() => {
-    const out = document.getElementById("elapsed");
+  const t = (elapsedTimers[id] = setInterval(() => {
+    const out = document.getElementById(id);
     if (!out || myRoute !== routeId) return clearInterval(t);
     const s = Math.max(0, Math.floor((Date.now() - start) / 1000));
     out.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -460,6 +612,7 @@ function scrollToAnchor(id) {
 async function route() {
   routeId++;
   frameEl = null;
+  document.getElementById("safetyModal")?.close();
   document.title = "Skills Explorer";
   const hash = location.hash.replace(/^#/, "") || "/";
   const [path, query = ""] = hash.split("?");

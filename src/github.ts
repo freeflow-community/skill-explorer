@@ -152,20 +152,36 @@ export async function discoverSkills(r: RepoRef, ref: string, subPath?: string):
 
 const TEXT_EXT = /\.(md|mdx|txt|sh|bash|zsh|py|ts|tsx|js|mjs|cjs|json|ya?ml|toml|html|css|sql)$/i;
 
-/** Gather a skill's SKILL.md plus its text resources, largest-last, within a character budget. */
+/** Every file under a skill's directory (repo-relative paths, with sizes). A root-level skill keeps to one directory level. */
+export async function listSkillFiles(r: RepoRef, ref: string, dir: string): Promise<TreeEntry[]> {
+  const prefix = dir ? `${dir}/` : "";
+  return (await listTree(r, ref))
+    .filter((e) => e.type === "blob" && (e.path.startsWith(prefix) || !prefix))
+    // A root-level skill would otherwise pull in the whole repo; keep to one directory level there.
+    .filter((e) => prefix || !e.path.includes("/") || e.path.split("/").length <= 3);
+}
+
+/** Path of a file relative to the skill directory. */
+export const relativeToSkill = (path: string, dir: string): string => (dir ? path.slice(dir.length + 1) || path : path);
+
+/**
+ * Gather a skill's SKILL.md plus its text resources, largest-last, within a character budget.
+ * `pattern` picks which files count as text (default: the flow builder's set); `entries` skips the tree fetch.
+ */
 export async function fetchSkillSources(
   r: RepoRef,
   ref: string,
   dir: string,
   budget: number,
   log?: Logger,
+  opts: { pattern?: RegExp | ((path: string) => boolean); entries?: TreeEntry[] } = {},
 ): Promise<{ path: string; content: string }[]> {
   const prefix = dir ? `${dir}/` : "";
   const skillMd = `${prefix}SKILL.md`;
-  const entries = (await listTree(r, ref))
-    .filter((e) => e.type === "blob" && (e.path.startsWith(prefix) || !prefix) && TEXT_EXT.test(e.path))
-    // A root-level skill would otherwise pull in the whole repo; keep to one directory level there.
-    .filter((e) => prefix || !e.path.includes("/") || e.path.split("/").length <= 3)
+  const pattern = opts.pattern ?? TEXT_EXT;
+  const isText = typeof pattern === "function" ? pattern : (p: string) => pattern.test(p);
+  const entries = (opts.entries ?? (await listSkillFiles(r, ref, dir)))
+    .filter((e) => e.type === "blob" && isText(e.path))
     .sort((a, b) => (a.path === skillMd ? -1 : b.path === skillMd ? 1 : (a.size ?? 0) - (b.size ?? 0)));
   const out: { path: string; content: string }[] = [];
   let used = 0;
@@ -175,13 +191,13 @@ export async function fetchSkillSources(
       continue;
     }
     if (used + (e.size ?? 0) > budget && e.path !== skillMd) {
-      log?.info("skipping file: over FLOW_SOURCE_BUDGET", { path: e.path, bytes: e.size, budget });
+      log?.info("skipping file: over the source budget", { path: e.path, bytes: e.size, budget });
       continue;
     }
     const content = await fetchFile(r, ref, e.path);
     used += content.length;
     log?.debug("fetched file", { path: e.path, chars: content.length });
-    out.push({ path: e.path.slice(prefix.length) || e.path, content });
+    out.push({ path: relativeToSkill(e.path, dir), content });
   }
   return out;
 }

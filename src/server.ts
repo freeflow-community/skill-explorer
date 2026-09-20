@@ -8,6 +8,8 @@ import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
+import { createRater } from "./scores/rater.ts";
+import { ScoreService } from "./scores/jobs.ts";
 import { StarStore } from "./stars.ts";
 import { getStore, type BlobStore } from "./storage.ts";
 
@@ -77,10 +79,17 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
-export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore }) {
-  const { index, flows, stars } = opts;
+export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService }) {
+  const { index, flows, stars, scores } = opts;
   const app = new Hono();
   const idx = () => index.current;
+  /** Attach each skill's safety grade summary (when it has been rated). */
+  const withSafety = <T extends Skill>(skills: T[]) => {
+    const all = scores.summaries();
+    return skills.map((s) => (all[s.slug] ? { ...s, safety: all[s.slug] } : s));
+  };
+  const buildAllowed = (c: { req: { header(name: string): string | undefined } }) =>
+    !config.flow.buildToken || tokenMatches(c.req.header("authorization"), config.flow.buildToken);
 
   app.onError((err, c) => {
     log.error("request failed", { method: c.req.method, path: c.req.path, error: err });
@@ -93,7 +102,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     await next();
     const path = c.req.path;
     const routine =
-      (c.req.method === "GET" && /^\/api\/skills\/[^/]+\/flow$/.test(path)) || !(path.startsWith("/api/") || path.startsWith("/flows/"));
+      (c.req.method === "GET" && /^\/api\/skills\/[^/]+\/(flow|safety)$/.test(path)) || !(path.startsWith("/api/") || path.startsWith("/flows/"));
     const fields = { method: c.req.method, path, status: c.res.status, ms: ms(t) };
     if (c.res.status >= 500) log.error("request", fields);
     else if (routine) log.debug("request", fields);
@@ -104,6 +113,8 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     c.json({
       flowModel: opts.generator.model,
       flowGenerator: config.flow.generator,
+      scoreModel: scores.model,
+      scoreProvider: config.score.provider,
       buildRequiresToken: !!config.flow.buildToken,
       storage: config.storage.backend,
       posthog: config.posthog,
@@ -115,7 +126,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const top = stars.top(limit);
     const skills = idx().getBySlugs(top.map((t) => t.slug));
     const counts = new Map(top.map((t) => [t.slug, t.count]));
-    return skills.map((s) => ({ ...s, stars: counts.get(s.slug) ?? 0 }));
+    return withSafety(skills.map((s) => ({ ...s, stars: counts.get(s.slug) ?? 0 })));
   };
 
   app.get("/api/home", async (c) => {
@@ -124,7 +135,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const skill = slug ? idx().getBySlug(slug) : null;
     const flow = skill ? await flows.getMeta(skill.slug) : null;
     return c.json({
-      recent: idx().recent(12),
+      recent: withSafety(idx().recent(12)),
       tags: idx().tagCounts(),
       collections: idx().collections(),
       total: idx().count(),
@@ -139,7 +150,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const tag = c.req.query("tag") || undefined;
     const collection = c.req.query("collection") || undefined;
     const repo = c.req.query("repo") || undefined;
-    return c.json({ q, tag, collection, repo, results: idx().search(q, { tag, collection, repo }) });
+    return c.json({ q, tag, collection, repo, results: withSafety(idx().search(q, { tag, collection, repo })) });
   });
 
   app.get("/api/tags", (c) => c.json(idx().tagCounts()));
@@ -150,7 +161,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   app.get("/api/skills", (c) => {
     const slugs = (c.req.query("slugs") ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 200);
     const counts = stars.counts();
-    return c.json({ results: idx().getBySlugs(slugs).map((s) => ({ ...s, stars: counts[s.slug] ?? 0 })) });
+    return c.json({ results: withSafety(idx().getBySlugs(slugs).map((s) => ({ ...s, stars: counts[s.slug] ?? 0 }))) });
   });
 
   /** One visitor's star, counted once per browser (the browser holds the state). */
@@ -169,6 +180,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
       skill,
       links: skillLinks(skill),
       flow: await flows.status(skill.slug),
+      safety: await scores.status(skill.slug),
       stars: stars.get(skill.slug),
       repoSkillCount: idx().countByRepo(skill.repoUrl),
     });
@@ -181,13 +193,27 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   });
 
   app.post("/api/skills/:slug/flow", async (c) => {
-    if (config.flow.buildToken && !tokenMatches(c.req.header("authorization"), config.flow.buildToken)) {
-      return c.json({ error: "Building flows needs the build token (FLOW_BUILD_TOKEN)" }, 401);
-    }
+    if (!buildAllowed(c)) return c.json({ error: "Building flows needs the build token (FLOW_BUILD_TOKEN)" }, 401);
     const slug = c.req.param("slug");
     if (!idx().getBySlug(slug)) return c.json({ error: "No skill with that name is in the index" }, 404);
     const job = flows.start(slug);
     return c.json({ job, flow: await flows.status(slug) }, 202);
+  });
+
+  /** Safety box score: the stored report plus any rating job in progress. */
+  app.get("/api/skills/:slug/safety", async (c) => {
+    const slug = c.req.param("slug");
+    if (!idx().getBySlug(slug)) return c.json({ error: "No skill with that name is in the index" }, 404);
+    return c.json(await scores.status(slug));
+  });
+
+  /** Ratings call a model too, so they share the build token rule. */
+  app.post("/api/skills/:slug/safety", async (c) => {
+    if (!buildAllowed(c)) return c.json({ error: "Rating skills needs the build token (FLOW_BUILD_TOKEN)" }, 401);
+    const slug = c.req.param("slug");
+    if (!idx().getBySlug(slug)) return c.json({ error: "No skill with that name is in the index" }, 404);
+    const job = scores.start(slug);
+    return c.json({ job, safety: await scores.status(slug) }, 202);
   });
 
   app.get("/flows/:slug", async (c) => {
@@ -216,6 +242,10 @@ async function main() {
     maxTokens: config.flow.maxTokens, concurrency: config.flow.concurrency, buildToken: !!config.flow.buildToken,
   });
   const flows = new FlowService({ store, generator, findSkill: (slug) => index.current.getBySlug(slug) });
+  const rater = createRater();
+  log.info("safety ratings configured", { provider: config.score.provider, model: rater.model, effort: config.score.effort, concurrency: config.score.concurrency });
+  const scores = new ScoreService({ store, rater, findSkill: (slug) => index.current.getBySlug(slug) });
+  await scores.restore();
   const stars = new StarStore({ store });
   await stars.restore();
 
@@ -225,7 +255,7 @@ async function main() {
     }, config.indexRefreshSeconds * 1000).unref();
   }
 
-  const app = createApp({ index, flows, generator, stars });
+  const app = createApp({ index, flows, generator, stars, scores });
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => void stars.snapshot().finally(() => process.exit(0)));
   }

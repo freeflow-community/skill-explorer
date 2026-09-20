@@ -17,6 +17,7 @@ type Provider = "anthropic" | "openai";
 const DEFAULT_MODEL: Record<Provider, string> = { anthropic: "claude-opus-5", openai: "gpt-5.4-mini" };
 const flowGenerator = env("FLOW_GENERATOR", "anthropic") as Provider | "stub";
 const tagProvider = env("TAG_PROVIDER", flowGenerator === "stub" ? "anthropic" : flowGenerator) as Provider;
+const scoreProvider = env("SCORE_PROVIDER", flowGenerator) as Provider | "stub";
 const r2Bucket = env("R2_BUCKET");
 const posthogHost = env("POSTHOG_HOST");
 
@@ -56,6 +57,7 @@ export const config = {
     indexKey: env("INDEX_KEY", "index/skills.db"),
     starsKey: env("STARS_KEY", "index/stars.json"),
     flowPrefix: env("FLOW_PREFIX", "flows/"),
+    scorePrefix: env("SCORE_PREFIX", "scores/"),
   },
 
   /** How often the server checks storage for a newer index (0 disables). */
@@ -72,6 +74,18 @@ export const config = {
     buildToken: env("FLOW_BUILD_TOKEN"),
     /** Max characters of skill source sent to the model. */
     sourceBudget: int("FLOW_SOURCE_BUDGET", 300_000),
+  },
+
+  /** Safety box scores: a static scan plus one structured model review per skill. */
+  score: {
+    /** Which API reviews skills: follows FLOW_GENERATOR unless SCORE_PROVIDER is set ("stub" = scan only). */
+    provider: scoreProvider,
+    model: env("SCORE_MODEL", DEFAULT_MODEL[scoreProvider === "stub" ? "anthropic" : scoreProvider]),
+    effort: env("SCORE_EFFORT", "medium") as "low" | "medium" | "high" | "xhigh" | "max",
+    maxTokens: int("SCORE_MAX_TOKENS", 16000),
+    concurrency: int("SCORE_CONCURRENCY", 2),
+    /** Max characters of skill source (SKILL.md, docs and scripts) sent to the reviewer. */
+    sourceBudget: int("SCORE_SOURCE_BUDGET", 200_000),
   },
 
   /** Skill whose flow the home page shows as an example (empty disables the promo). */

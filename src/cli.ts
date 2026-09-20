@@ -5,6 +5,8 @@ import { config } from "./config.ts";
 import { SkillIndex, normalizeTag, type Skill } from "./db.ts";
 import { createGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
+import { ScoreService } from "./scores/jobs.ts";
+import { createRater } from "./scores/rater.ts";
 import { countSkills, defaultBranch, discoverSkills, parseRepo, repoUrl } from "./github.ts";
 import { SyncConflictError, ensureLocalIndex, hasUnpushedChanges, pullIndex, pushIndex, readSyncState, remoteIsNewer } from "./indexSync.ts";
 import { getStore } from "./storage.ts";
@@ -33,6 +35,7 @@ Usage: npm run cli -- <command> [options]
   remove <slug>                 Remove a skill from the index
   sync status|pull|push         Compare, download or upload the index (push --force overwrites)
   build-flow <slug>             Build a skill's visual flow now (instead of from the web page)
+  score <slug>                  Rate a skill's safety box score now (instead of from the web page)
 
 The index lives at ${config.indexDbPath}; storage is ${config.storage.backend}.
 `;
@@ -195,6 +198,27 @@ async function buildFlow(slug: string | undefined): Promise<void> {
   console.log(`Done. Stored ${flows.htmlKey(skill.slug)} in ${getStore().name}.`);
 }
 
+async function score(slug: string | undefined): Promise<void> {
+  ensureGithubToken();
+  const index = await openIndex();
+  const skill = mustGet(index, slug);
+  const rater = createRater();
+  const scores = new ScoreService({ store: getStore(), rater, findSkill: (s) => index.getBySlug(s) });
+  await scores.restore();
+  console.log(`Rating ${skill.slug} with ${rater.model}…`);
+  const job = await scores.waitFor(scores.start(skill.slug).id, 500);
+  index.close();
+  if (job.status === "failed") fail(job.error ?? "rating failed");
+  const report = (await scores.getReport(skill.slug))!;
+  console.log(`Grade ${report.grade} (${report.label}, ${report.score}/100 risk points). ${report.summary}`);
+  for (const c of report.categories) console.log(`  ${String(c.level).padEnd(2)} ${c.name.padEnd(28)} ${c.rationale}`);
+  if (report.findings.length) {
+    console.log("Findings:");
+    for (const f of report.findings) console.log(`  [${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`);
+  }
+  console.log(`Stored ${scores.reportKey(skill.slug)} in ${getStore().name}.`);
+}
+
 async function main(): Promise<void> {
   const { values: v, positionals } = parseArgs({
     allowPositionals: true,
@@ -229,6 +253,8 @@ async function main(): Promise<void> {
       return sync(args[0], !!v.force);
     case "build-flow":
       return buildFlow(args[0]);
+    case "score":
+      return score(args[0]);
   }
 
   const index = await openIndex();
