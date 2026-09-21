@@ -12,6 +12,7 @@ import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../
 import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
 import { buildInventory, classifyFile, scanSources, scoreLevels, type CategoryKey, type Level } from "../src/scores/scan.ts";
+import { PageRenderer } from "../src/pages.ts";
 import { createApp, IndexHolder } from "../src/server.ts";
 import { StarStore } from "../src/stars.ts";
 import { LocalBlobStore } from "../src/storage.ts";
@@ -243,6 +244,61 @@ test("HTTP API: stars, popular tab and favourites lookup", async () => {
   assert.deepEqual((await (await app.request("/api/popular")).json()).results.map((s: { slug: string }) => s.slug), ["provision-cloud-agent"]);
 });
 
+test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", async () => {
+  const dir = tmp();
+  const dbPath = join(dir, "i.db");
+  seed(dbPath).close();
+  const holder = new IndexHolder(dbPath);
+  const generator = new StubFlowGenerator(5);
+  const flows = new FlowService({
+    store: new LocalBlobStore(join(dir, "blobs")), generator, jobsDbPath: ":memory:",
+    findSkill: (s) => holder.current.getBySlug(s), loadSources: async () => [{ path: "SKILL.md", content: "x" }],
+  });
+  const scores = new ScoreService({ store: new LocalBlobStore(join(dir, "blobs")), rater: new StubRater(0), jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }), scores, pages: new PageRenderer("https://example.test/") });
+
+  const home = await app.request("/");
+  assert.equal(home.status, 200);
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /<title>Skills Explorer<\/title>/);
+  assert.match(homeHtml, /<link rel="canonical" href="https:\/\/example.test\/">/);
+  assert.match(homeHtml, /<a href="\/skill\/review-pr">/, "crawlers can reach every skill from the home page");
+  assert.doesNotMatch(homeHtml, /<!--page:(head|body)-->/, "the markers are consumed");
+  assert.match(homeHtml, /<script src="\/app.js" type="module">/, "the client app still loads over the pre-rendered page");
+
+  const skill = await app.request("/skill/review-pr");
+  assert.equal(skill.status, 200);
+  const skillHtml = await skill.text();
+  assert.match(skillHtml, /<title>review-pr · Skills Explorer<\/title>/);
+  assert.match(skillHtml, /<meta name="description" content="[^"]+">/);
+  assert.match(skillHtml, /<link rel="canonical" href="https:\/\/example.test\/skill\/review-pr">/);
+  assert.match(skillHtml, /<meta property="og:title" content="review-pr">/);
+  assert.match(skillHtml, /href="https:\/\/github.com\/acme\/skills\/blob\/main\/review-pr\/SKILL.md"/);
+
+  const missing = await app.request("/skill/nope");
+  assert.equal(missing.status, 404);
+  assert.match(await missing.text(), /<meta name="robots" content="noindex">/);
+  assert.equal((await app.request("/no/such/page")).status, 404);
+
+  const tagged = await app.request("/search?tag=aws");
+  const taggedHtml = await tagged.text();
+  assert.match(taggedHtml, /<link rel="canonical" href="https:\/\/example.test\/search\?tag=aws">/, "tag listings are indexable");
+  assert.match(taggedHtml, /<a href="\/skill\/provision-cloud-agent">/);
+  assert.match(await (await app.request("/search?q=railway")).text(), /noindex/, "free-text searches are not");
+  assert.match(await (await app.request("/favorites")).text(), /noindex/);
+
+  const sitemap = await app.request("/sitemap.xml");
+  assert.equal(sitemap.status, 200);
+  assert.match(sitemap.headers.get("content-type")!, /^application\/xml/);
+  const xml = await sitemap.text();
+  assert.match(xml, /<loc>https:\/\/example.test\/skill\/review-pr<\/loc>/);
+  assert.match(xml, /<loc>https:\/\/example.test\/skill\/provision-cloud-agent<\/loc>/);
+  assert.match(await (await app.request("/robots.txt")).text(), /Sitemap: https:\/\/example.test\/sitemap.xml/);
+
+  // The shell no longer carries a hash router: no internal link uses "#/".
+  assert.doesNotMatch(homeHtml, /href="#\//);
+});
+
 test("HTTP API: home, search, detail, build and sandboxed flow page", async () => {
   const dir = tmp();
   const dbPath = join(dir, "i.db");
@@ -263,7 +319,7 @@ test("HTTP API: home, search, detail, build and sandboxed flow page", async () =
 
   const home = await (await app.request("/api/home")).json();
   assert.equal(home.total, 2);
-  assert.equal(home.recent[0].slug, "provision-cloud-agent");
+  assert.deepEqual(home.discover.map((s: { slug: string }) => s.slug).sort(), ["provision-cloud-agent", "review-pr"], "Discover is a random pick from the whole index");
   const search = await (await app.request("/api/search?q=railway")).json();
   assert.deepEqual(search.results.map((s: { slug: string }) => s.slug), ["provision-cloud-agent"]);
 

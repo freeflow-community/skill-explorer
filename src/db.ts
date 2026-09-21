@@ -203,6 +203,11 @@ export class SkillIndex {
     return (this.db.prepare(`${SELECT} ORDER BY s.created_at DESC, s.id DESC LIMIT ?`).all(limit) as Row[]).map(toSkill);
   }
 
+  /** A fresh random pick each call, for the home page's Discover list. */
+  random(limit = 12): Skill[] {
+    return (this.db.prepare(`${SELECT} ORDER BY RANDOM() LIMIT ?`).all(limit) as Row[]).map(toSkill);
+  }
+
   all(): Skill[] {
     return (this.db.prepare(`${SELECT} ORDER BY s.name COLLATE NOCASE`).all() as Row[]).map(toSkill);
   }

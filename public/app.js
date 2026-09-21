@@ -1,4 +1,5 @@
-// Skills Explorer front end: a small hash-routed app over the JSON API.
+// Skills Explorer front end: a small client-routed app over the JSON API. The server pre-renders
+// each page for crawlers; this script draws the interactive version over it and handles navigation.
 import { initializePosthog } from "./posthog.js";
 
 const app = document.getElementById("app");
@@ -141,16 +142,16 @@ const repoLabel = (url) => String(url).replace("https://github.com/", "");
 const repoOwner = (url) => repoLabel(url).split("/")[0] ?? "";
 /** Small owner/org label linking to that repository's skills. */
 const ownerChip = (url) =>
-  `<a class="owner" href="#/search?repo=${enc(url)}" title="All skills from ${esc(repoLabel(url))}">${esc(repoOwner(url))}</a>`;
-const repoLink = (url, text) => `<a href="#/search?repo=${enc(url)}">${esc(text ?? repoLabel(url))}</a>`;
+  `<a class="owner" href="/search?repo=${enc(url)}" title="All skills from ${esc(repoLabel(url))}">${esc(repoOwner(url))}</a>`;
+const repoLink = (url, text) => `<a href="/search?repo=${enc(url)}">${esc(text ?? repoLabel(url))}</a>`;
 
-const tagChips = (tags) => (tags.length ? `<div class="chips">${tags.map((t) => `<a class="chip" href="#/search?tag=${enc(t)}">${esc(t)}</a>`).join("")}</div>` : "");
-const collChip = (c) => (c ? `<a class="coll" href="#/search?collection=${enc(c)}">${esc(c)}</a>` : "");
+const tagChips = (tags) => (tags.length ? `<div class="chips">${tags.map((t) => `<a class="chip" href="/search?tag=${enc(t)}">${esc(t)}</a>`).join("")}</div>` : "");
+const collChip = (c) => (c ? `<a class="coll" href="/search?collection=${enc(c)}">${esc(c)}</a>` : "");
 
 function card(s) {
   // The card is a div (not a link) so its tag, collection and star controls stay separate targets.
   return `<article class="card">
-    <div class="card-top"><h3><a href="#/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
+    <div class="card-top"><h3><a href="/skill/${enc(s.slug)}">${esc(s.name)}</a></h3>
       <span class="card-right">${collChip(s.collection)}${starButton(s.slug, s.stars ?? 0)}</span></div>
     ${s.description ? `<p class="desc">${esc(excerpt(s.description))}</p>` : `<p class="desc muted">No description in its SKILL.md.</p>`}
     <div class="foot">${tagChips(s.tags)}
@@ -159,7 +160,7 @@ function card(s) {
 }
 
 function examplePromo(ex) {
-  return `<a class="promo" href="#/skill/${enc(ex.slug)}?flow">
+  return `<a class="promo" href="/skill/${enc(ex.slug)}?flow">
     <span class="eyebrow">Example flow</span>
     <span class="promo-text"><strong>${esc(ex.name)}</strong> — see what a built visual flow looks like</span>
     <span class="btn primary" aria-hidden="true">Open the flow</span>
@@ -172,7 +173,7 @@ function tagCloud(tags) {
   const size = (n) => (0.85 + (Math.log(n) / Math.log(Math.max(max, 2))) * 0.85).toFixed(2);
   return `<div class="cloud">${[...tags]
     .sort((a, b) => a.tag.localeCompare(b.tag))
-    .map((t) => `<a href="#/search?tag=${enc(t.tag)}" style="font-size:${size(t.count)}rem" title="${t.count} skill${t.count > 1 ? "s" : ""}">${esc(t.tag)}<sup>${t.count}</sup></a>`)
+    .map((t) => `<a href="/search?tag=${enc(t.tag)}" style="font-size:${size(t.count)}rem" title="${t.count} skill${t.count > 1 ? "s" : ""}">${esc(t.tag)}<sup>${t.count}</sup></a>`)
     .join("")}</div>`;
 }
 
@@ -183,7 +184,7 @@ let homeData = null;
 function favoritesSummary() {
   const n = starred.size;
   return n
-    ? `<p><a href="#/favorites">${n} starred skill${n === 1 ? "" : "s"}</a></p>`
+    ? `<p><a href="/favorites">${n} starred skill${n === 1 ? "" : "s"}</a></p>`
     : `<p class="muted">Star a skill with ☆ and it shows up here, on this browser.</p>`;
 }
 
@@ -207,18 +208,18 @@ async function viewHome() {
         ${d.example ? examplePromo(d.example) : ""}
         <div class="section-head">
           <div class="tabs" role="tablist">
-            <button type="button" role="tab" class="tab" id="tab-new" aria-selected="true" data-tab="new">New in the index</button>
+            <button type="button" role="tab" class="tab" id="tab-discover" aria-selected="true" data-tab="discover">Discover</button>
             <button type="button" role="tab" class="tab" id="tab-popular" aria-selected="false" data-tab="popular">Popular</button>
           </div>
-          <a href="#/search">Browse all</a>
+          <a href="/search">Browse all</a>
         </div>
-        <div class="cards" id="homeList">${d.recent.map(card).join("")}</div>
+        <div class="cards" id="homeList">${d.discover.map(card).join("")}</div>
       </section>
       <aside class="side">
         <section class="section"><h2>Favorites</h2>${favoritesSummary()}</section>
         <section class="section"><h2>Tags</h2>${tagCloud(d.tags)}</section>
         ${d.collections.length ? `<section class="section"><h2>Collections</h2><ul class="list-plain">${d.collections
-          .map((c) => `<li><a href="#/search?collection=${enc(c.collection)}"><span>${esc(c.collection)}</span><span class="n">${c.count}</span></a></li>`)
+          .map((c) => `<li><a href="/search?collection=${enc(c.collection)}"><span>${esc(c.collection)}</span><span class="n">${c.count}</span></a></li>`)
           .join("")}</ul></section>` : ""}
       </aside>
     </div>`;
@@ -233,7 +234,7 @@ function bindHomeTabs() {
       const list = document.getElementById("homeList");
       capture("home_tab_changed", { tab: which });
       if (which !== "popular") {
-        list.innerHTML = homeData.recent.map(card).join("");
+        list.innerHTML = homeData.discover.map(card).join("");
         return;
       }
       // Re-fetch so stars added since the page loaded are counted.
@@ -250,7 +251,7 @@ async function viewFavorites() {
   if (!slugs.length) {
     app.innerHTML = `<div class="empty"><h1>No favorites yet</h1>
       <p class="muted">Star a skill with ☆ on any skill page or card. Favorites are kept in this browser only, so they don't follow you to another device.</p>
-      <a class="btn" href="#/">Back to the index</a></div>`;
+      <a class="btn" href="/">Back to the index</a></div>`;
     return;
   }
   const d = await api(`/api/skills?slugs=${enc(slugs.join(","))}`);
@@ -272,7 +273,7 @@ async function viewSearch(params) {
   const without = (key) => {
     const p = new URLSearchParams(params);
     p.delete(key);
-    return `#/search?${p}`;
+    return `/search?${p}`;
   };
   const filters = [
     q && `<span class="filter">matching “${esc(q)}”<a href="${without("q")}" aria-label="Clear search">×</a></span>`,
@@ -285,12 +286,12 @@ async function viewSearch(params) {
     <section class="intro"><span class="eyebrow">Search</span><h1>${title}</h1>
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
     ${d.results.length ? `<div class="results">${d.results
-      .map((s) => `<a class="result" href="#/skill/${enc(s.slug)}">
+      .map((s) => `<a class="result" href="/skill/${enc(s.slug)}">
           <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
           <div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<span class="owner-inline">${esc(repoLabel(s.repoUrl))}</span></div>
         </a>`).join("")}</div>`
-      : `<div class="empty"><h2>No skills match</h2><p class="muted">Search looks at skill names and descriptions. Try fewer or shorter words, or remove a filter.</p><a class="btn" href="#/">Back to the index</a></div>`}`;
+      : `<div class="empty"><h2>No skills match</h2><p class="muted">Search looks at skill names and descriptions. Try fewer or shorter words, or remove a filter.</p><a class="btn" href="/">Back to the index</a></div>`}`;
 }
 
 async function viewSkill(slug, params = new URLSearchParams()) {
@@ -300,14 +301,14 @@ async function viewSkill(slug, params = new URLSearchParams()) {
     d = await api(`/api/skills/${enc(slug)}`);
   } catch (e) {
     if (e.status !== 404) throw e;
-    app.innerHTML = `<div class="empty"><h1>Skill not found</h1><p class="muted">“${esc(slug)}” isn't in the index. It may have been renamed or removed.</p><a class="btn" href="#/">Back to the index</a></div>`;
+    app.innerHTML = `<div class="empty"><h1>Skill not found</h1><p class="muted">“${esc(slug)}” isn't in the index. It may have been renamed or removed.</p><a class="btn" href="/">Back to the index</a></div>`;
     return;
   }
   const s = d.skill;
   const repoName = s.repoUrl.replace("https://github.com/", "");
   document.title = `${s.name} · Skills Explorer`;
   app.innerHTML = `
-    <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Index</a><span>/</span>${s.collection ? `<a href="#/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Index</a><span>/</span>${s.collection ? `<a href="/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
     <div class="detail-grid">
     <div class="detail-main">
     <section class="detail-head">
@@ -331,7 +332,7 @@ async function viewSkill(slug, params = new URLSearchParams()) {
     <section class="flow" id="flow" aria-live="polite"></section>`;
   renderSafety(s, d.safety, myRoute);
   renderFlow(s, d.flow, myRoute);
-  // #/skill/<slug>?flow (or ?safety) links straight to that panel; the router scrolls there once it's done.
+  // /skill/<slug>?flow (or ?safety) links straight to that panel; the router scrolls there once it's done.
   if (params.has("flow")) pendingAnchor = "flow";
   else if (params.has("safety")) pendingAnchor = "safety";
 }
@@ -399,7 +400,7 @@ function renderSafety(s, st, myRoute) {
   const el = document.getElementById("safety");
   if (!el || myRoute !== routeId) return;
   const model = serverConfig.scoreModel;
-  const head = `<div class="box-head"><span class="eyebrow">Safety box score</span><a class="anchor" href="#/skill/${enc(s.slug)}?safety" title="Link to this skill's safety score" aria-label="Link to this skill's safety score">#</a></div>`;
+  const head = `<div class="box-head"><span class="eyebrow">Safety box score</span><a class="anchor" href="/skill/${enc(s.slug)}?safety" title="Link to this skill's safety score" aria-label="Link to this skill's safety score">#</a></div>`;
   const rateBtn = (label, primary) => `<button type="button" class="btn ${primary ? "primary" : ""} ${primary ? "" : "small"}" data-rate>${label}</button>`;
   const summary = (r, extra = "") => `
     <div class="box-grade">${gradeBadge(r)}<div><strong>${esc(r.label)}</strong><span class="muted">${r.score} / 100 risk points</span></div></div>
@@ -495,7 +496,7 @@ function renderFlow(s, st, myRoute) {
   frameEl = null;
   const model = serverConfig.flowModel;
   const head = (right = "") =>
-    `<div class="flow-head"><div><h2>Visual flow<a class="anchor" href="#/skill/${enc(s.slug)}?flow" title="Link to this skill's visual flow" aria-label="Link to this skill's visual flow">#</a></h2>${right}</div>`;
+    `<div class="flow-head"><div><h2>Visual flow<a class="anchor" href="/skill/${enc(s.slug)}?flow" title="Link to this skill's visual flow" aria-label="Link to this skill's visual flow">#</a></h2>${right}</div>`;
   const buildBtn = (label, primary) => `<button type="button" class="btn ${primary ? "primary" : ""}" data-build>${label}</button>`;
 
   if (st.state === "queued" || st.state === "running") {
@@ -613,15 +614,15 @@ async function route() {
   frameEl = null;
   document.getElementById("safetyModal")?.close();
   document.title = "Skills Explorer";
-  const hash = location.hash.replace(/^#/, "") || "/";
-  const [path, query = ""] = hash.split("?");
-  const params = new URLSearchParams(query);
+  const path = location.pathname || "/";
+  const params = new URLSearchParams(location.search);
   if (!path.startsWith("/search")) qInput.value = "";
   try {
     if (path.startsWith("/skill/")) await viewSkill(decodeURIComponent(path.slice("/skill/".length)), params);
-    else if (path.startsWith("/favorites")) await viewFavorites();
-    else if (path.startsWith("/search")) await viewSearch(params);
-    else await viewHome();
+    else if (path === "/favorites") await viewFavorites();
+    else if (path === "/search") await viewSearch(params);
+    else if (path === "/" || path === "/index.html") await viewHome();
+    else viewNotFound();
   } catch (e) {
     app.innerHTML = `<div class="note bad"><strong>Something went wrong loading this page.</strong> ${esc(e.message)}</div>`;
   }
@@ -635,9 +636,9 @@ async function route() {
   } else {
     window.scrollTo({ top: 0 });
   }
-  // Routes change the #hash, which GTM's built-in page view doesn't see, so report each one.
+  // Navigation happens without a page load, which GTM's built-in page view doesn't see, so report each one.
   track("virtual_page_view", {
-    page_path: `${location.pathname}${location.hash}`,
+    page_path: `${location.pathname}${location.search}`,
     page_location: location.href,
     page_title: document.title,
   });
@@ -655,7 +656,7 @@ document.addEventListener("click", async (e) => {
     el.outerHTML = starButton(slug, Math.max(0, shown));
   });
   const fav = document.querySelector(".side .section p");
-  if (fav && location.hash.replace(/^#/, "").split("?")[0] === "/") fav.outerHTML = favoritesSummary();
+  if (fav && location.pathname === "/") fav.outerHTML = favoritesSummary();
 });
 
 document.getElementById("searchForm").addEventListener("submit", (e) => {
@@ -663,9 +664,34 @@ document.getElementById("searchForm").addEventListener("submit", (e) => {
   const q = qInput.value.trim();
   track("search", { search_term: q });
   capture("search_performed", { has_query: Boolean(q), query_length: q.length });
-  location.hash = `#/search?q=${enc(q)}`;
+  navigate(`/search?q=${enc(q)}`);
 });
-window.addEventListener("hashchange", route);
+
+function viewNotFound() {
+  document.title = "Not found · Skills Explorer";
+  app.innerHTML = `<div class="empty"><h1>Not found</h1><p class="muted">There's nothing at ${esc(location.pathname)}.</p><a class="btn" href="/">Back to the index</a></div>`;
+}
+
+function navigate(url) {
+  history.pushState(null, "", url);
+  route();
+}
+
+// Same-site links render in place; everything else (GitHub, flows, new tabs, modified clicks) is left to the browser.
+document.addEventListener("click", (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest("a[href]");
+  if (!a || a.target === "_blank" || a.hasAttribute("download") || a.origin !== location.origin) return;
+  const href = a.getAttribute("href");
+  if (!href.startsWith("/") || href.startsWith("//") || href.startsWith("/api/") || href.startsWith("/flows/")) return;
+  e.preventDefault();
+  if (href === `${location.pathname}${location.search}`) route();
+  else navigate(href);
+});
+window.addEventListener("popstate", route);
+
+// Links from the hash-router days (/#/skill/x) still work: swap them for the real path before the first render.
+if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));
 
 // The page must render even when config or analytics fail, so nothing here is fatal.
 api("/api/config")

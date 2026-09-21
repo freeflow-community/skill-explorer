@@ -33,6 +33,8 @@ function posthogAssetHost(host: string): string {
 
 export const config = {
   port: int("PORT", 8787),
+  /** Public origin, for canonical links and the sitemap. */
+  siteUrl: env("SITE_URL", "https://skillexplorer.dev"),
   dataDir,
   posthog: {
     projectToken: env("POSTHOG_PROJECT_TOKEN"),

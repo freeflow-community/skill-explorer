@@ -8,6 +8,7 @@ import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
+import { PageRenderer } from "./pages.ts";
 import { createRater } from "./scores/rater.ts";
 import { ScoreService } from "./scores/jobs.ts";
 import { StarStore } from "./stars.ts";
@@ -79,8 +80,9 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
-export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService }) {
+export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService; pages?: PageRenderer }) {
   const { index, flows, stars, scores } = opts;
+  const pages = opts.pages ?? new PageRenderer(config.siteUrl);
   const app = new Hono();
   const idx = () => index.current;
   /** Attach each skill's safety grade summary (when it has been rated). */
@@ -135,7 +137,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const skill = slug ? idx().getBySlug(slug) : null;
     const flow = skill ? await flows.getMeta(skill.slug) : null;
     return c.json({
-      recent: withSafety(idx().recent(12)),
+      discover: withSafety(idx().random(12)),
       tags: idx().tagCounts(),
       collections: idx().collections(),
       total: idx().count(),
@@ -225,9 +227,32 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     return c.html(injectHeightReporter(html));
   });
 
+  // Pages. Each is the client shell with its title, description and content pre-rendered, so
+  // crawlers and link previews see the real thing; the client script then renders over it.
+  app.get("/", (c) => c.html(pages.home({ discover: idx().random(12), collections: idx().collections(), total: idx().count() })));
+
+  app.get("/search", (c) => {
+    const query = { q: c.req.query("q") || undefined, tag: c.req.query("tag") || undefined, collection: c.req.query("collection") || undefined, repo: c.req.query("repo") || undefined };
+    return c.html(pages.search(query, idx().search(query.q ?? "", query)));
+  });
+
+  app.get("/favorites", (c) => c.html(pages.favorites()));
+
+  app.get("/skill/:slug", (c) => {
+    const slug = c.req.param("slug");
+    const skill = idx().getBySlug(slug);
+    if (!skill) return c.html(pages.notFound(`"${slug}" isn't in the index. It may have been renamed or removed.`), 404);
+    return c.html(pages.skill(skill, skillLinks(skill)));
+  });
+
+  app.get("/sitemap.xml", (c) => {
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.body(pages.sitemap(idx().all(), idx().collections()), 200, { "Content-Type": "application/xml; charset=utf-8" });
+  });
+  app.get("/robots.txt", (c) => c.text(pages.robots()));
+
   app.use("/*", serveStatic({ root: "./public" }));
-  // Client-side routes (#/...) all load the same page.
-  app.get("*", serveStatic({ path: "./public/index.html" }));
+  app.get("*", (c) => c.html(pages.notFound(`There's nothing at ${c.req.path}.`), 404));
   return app;
 }
 
