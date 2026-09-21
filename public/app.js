@@ -191,6 +191,7 @@ function favoritesSummary() {
 async function viewHome() {
   const d = await api("/api/home");
   homeData = d;
+  document.title = "Agent Skills Directory for Claude Code & Codex · Skills Explorer";
   if (!d.total) {
     app.innerHTML = `<div class="empty"><h1>No skills indexed yet</h1>
       <p class="lede">Add a repository with the index tool, then reload this page:</p>
@@ -267,8 +268,21 @@ async function viewSearch(params) {
   const tag = params.get("tag") ?? "";
   const collection = params.get("collection") ?? "";
   const repo = params.get("repo") ?? "";
+  const page = Math.max(1, Number(params.get("page")) || 1);
   qInput.value = q;
-  const d = await api(`/api/search?q=${enc(q)}&tag=${enc(tag)}&collection=${enc(collection)}&repo=${enc(repo)}`);
+  const d = await api(`/api/search?q=${enc(q)}&tag=${enc(tag)}&collection=${enc(collection)}&repo=${enc(repo)}&page=${page}`);
+  const pages = Math.max(1, Math.ceil(d.total / d.pageSize));
+  const pageHref = (n) => {
+    const p = new URLSearchParams(params);
+    if (n > 1) p.set("page", String(n));
+    else p.delete("page");
+    return `/search${p.toString() ? `?${p}` : ""}`;
+  };
+  const pager = pages > 1
+    ? `<nav class="pager" aria-label="Pages">${page > 1 ? `<a rel="prev" href="${pageHref(page - 1)}">Previous</a>` : `<span class="muted">Previous</span>`}
+        <span class="pager-pages">Page ${page} of ${pages}: ${Array.from({ length: pages }, (_, i) => i + 1).map((n) => (n === page ? `<strong aria-current="page">${n}</strong>` : `<a href="${pageHref(n)}">${n}</a>`)).join(" ")}</span>
+        ${page < pages ? `<a rel="next" href="${pageHref(page + 1)}">Next</a>` : `<span class="muted">Next</span>`}</nav>`
+    : "";
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const without = (key) => {
     const p = new URLSearchParams(params);
@@ -281,7 +295,8 @@ async function viewSearch(params) {
     collection && `<span class="filter">collection <strong>${esc(collection)}</strong><a href="${without("collection")}" aria-label="Remove collection filter">×</a></span>`,
     repo && `<span class="filter">repo <strong>${esc(repoLabel(repo))}</strong><a href="${without("repo")}" aria-label="Remove repository filter">×</a></span>`,
   ].filter(Boolean);
-  const title = q || tag || collection || repo ? `${d.results.length} result${d.results.length === 1 ? "" : "s"}` : "All skills";
+  const title = q || tag || collection || repo ? `${d.total} result${d.total === 1 ? "" : "s"}` : `All ${d.total} skills`;
+  document.title = `${collection ? `${collection} collection` : tag ? `Skills tagged ${tag}` : repo ? `Skills from ${repoLabel(repo)}` : q ? `Search: ${q}` : "All skills"}${page > 1 ? `, page ${page}` : ""} · Skills Explorer`;
   app.innerHTML = `
     <section class="intro"><span class="eyebrow">Search</span><h1>${title}</h1>
       ${filters.length ? `<div class="filters">${filters.join("")}</div>` : ""}</section>
@@ -290,7 +305,7 @@ async function viewSearch(params) {
           <h3>${highlight(s.name, terms)}</h3><span class="card-right">${s.collection ? `<span class="coll">${esc(s.collection)}</span>` : ""}${starButton(s.slug, s.stars ?? 0)}</span>
           ${s.description ? `<p class="desc">${highlight(excerpt(s.description, 320), terms)}</p>` : ""}
           <div class="chips">${s.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}<span class="owner-inline">${esc(repoLabel(s.repoUrl))}</span></div>
-        </a>`).join("")}</div>`
+        </a>`).join("")}</div>${pager}`
       : `<div class="empty"><h2>No skills match</h2><p class="muted">Search looks at skill names and descriptions. Try fewer or shorter words, or remove a filter.</p><a class="btn" href="/">Back to the index</a></div>`}`;
 }
 
@@ -306,9 +321,9 @@ async function viewSkill(slug, params = new URLSearchParams()) {
   }
   const s = d.skill;
   const repoName = s.repoUrl.replace("https://github.com/", "");
-  document.title = `${s.name} · Skills Explorer`;
+  document.title = `${s.name}: Claude Code skill by ${repoOwner(s.repoUrl)} · Skills Explorer`;
   app.innerHTML = `
-    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Index</a><span>/</span>${s.collection ? `<a href="/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Skills</a><span>/</span>${s.collection ? `<a href="/search?collection=${enc(s.collection)}">${esc(s.collection)}</a><span>/</span>` : ""}<span>${esc(s.name)}</span></nav>
     <div class="detail-grid">
     <div class="detail-main">
     <section class="detail-head">
@@ -326,15 +341,29 @@ async function viewSkill(slug, params = new URLSearchParams()) {
       <div><dt>Added</dt><dd title="${esc(fullDate(s.createdAt))}">${relTime(s.createdAt)}</dd></div>
       <div><dt>Updated</dt><dd title="${esc(fullDate(s.updatedAt))}">${relTime(s.updatedAt)}</dd></div>
     </dl>
+    ${installSection(d.install)}
     </div>
     <aside class="boxscore" id="safety" aria-live="polite" aria-label="Safety box score"></aside>
     </div>
-    <section class="flow" id="flow" aria-live="polite"></section>`;
+    <section class="flow" id="flow" aria-live="polite"></section>
+    ${d.related?.length ? `<section class="section related"><h2>Related skills</h2><div class="cards">${d.related.map(card).join("")}</div></section>` : ""}`;
   renderSafety(s, d.safety, myRoute);
   renderFlow(s, d.flow, myRoute);
   // /skill/<slug>?flow (or ?safety) links straight to that panel; the router scrolls there once it's done.
   if (params.has("flow")) pendingAnchor = "flow";
   else if (params.has("safety")) pendingAnchor = "safety";
+}
+
+/** How to get the skill onto a machine: the skills CLI, or a copy into Claude Code's skills directory. */
+function installSection(install) {
+  if (!install) return "";
+  return `<section class="install" id="install">
+    <h2>Install<a class="anchor" href="#install" title="Link to the install steps" aria-label="Link to the install steps">#</a></h2>
+    <p>With the <a href="https://github.com/vercel-labs/skills" target="_blank" rel="noopener">skills</a> CLI, which installs into Claude Code, Codex, Cursor and other agents:</p>
+    <pre><code>${esc(install.cli)}</code></pre>
+    <p class="muted">Or copy the skill folder into Claude Code's skills directory by hand (<code>~/.claude/skills</code> for every project, or <code>.claude/skills</code> inside one):</p>
+    <pre><code>${esc(install.manual)}</code></pre>
+  </section>`;
 }
 
 /* ---------------- safety box score panel ---------------- */
@@ -420,7 +449,7 @@ function renderSafety(s, st, myRoute) {
   } else if (st.state === "ready") {
     const r = st.report;
     el.innerHTML = `${head}${summary(r, rateBtn("Re-rate", false))}
-      <p class="muted small box-foot" title="${esc(r.model)}">Rated ${relTime(r.ratedAt)} from ${r.sourceFiles.length} file${r.sourceFiles.length === 1 ? "" : "s"}</p>`;
+      <p class="muted small box-foot" title="${esc(r.model)}">Rated ${relTime(r.ratedAt)} from ${r.sourceFiles.length} file${r.sourceFiles.length === 1 ? "" : "s"} · <a href="/safety">How it works</a></p>`;
   } else if (st.state === "failed") {
     el.innerHTML = `${head}
       <div class="note bad small"><strong>The last rating failed.</strong> ${esc(st.job.error || "No error message was recorded.")}</div>
@@ -428,7 +457,7 @@ function renderSafety(s, st, myRoute) {
       ${st.report ? `<p class="muted small">Previous rating, from ${relTime(st.report.ratedAt)}:</p>${summary(st.report)}` : ""}`;
   } else {
     el.innerHTML = `${head}
-      <p class="muted small">What installing this skill lets an agent do: eight categories from shell execution to secrets access, rated from its own files and scripts${model ? ` by <span class="mono">${esc(model)}</span>` : ""}. Takes a minute or two; saved for everyone.</p>
+      <p class="muted small">What installing this skill lets an agent do: eight categories from shell execution to secrets access, rated from its own files and scripts${model ? ` by <span class="mono">${esc(model)}</span>` : ""}. Takes a minute or two; saved for everyone. <a href="/safety">How it works</a>.</p>
       <div class="box-actions">${rateBtn("Request score", true)}</div>`;
   }
   el.querySelector("[data-rate]")?.addEventListener("click", (e) => startRating(s, e.currentTarget, myRoute));
@@ -609,20 +638,22 @@ function scrollToAnchor(id) {
 
 /* ---------------- router ---------------- */
 
+/** Paths this script renders itself. Everything else (/about, /safety, /skills, 404s) is the server's page, left as is. */
+const clientRendered = (path) => path === "/" || path === "/index.html" || path === "/search" || path === "/favorites" || path.startsWith("/skill/");
+
 async function route() {
   routeId++;
   frameEl = null;
   document.getElementById("safetyModal")?.close();
-  document.title = "Skills Explorer";
   const path = location.pathname || "/";
   const params = new URLSearchParams(location.search);
   if (!path.startsWith("/search")) qInput.value = "";
+  if (!clientRendered(path)) return;
   try {
     if (path.startsWith("/skill/")) await viewSkill(decodeURIComponent(path.slice("/skill/".length)), params);
     else if (path === "/favorites") await viewFavorites();
     else if (path === "/search") await viewSearch(params);
-    else if (path === "/" || path === "/index.html") await viewHome();
-    else viewNotFound();
+    else await viewHome();
   } catch (e) {
     app.innerHTML = `<div class="note bad"><strong>Something went wrong loading this page.</strong> ${esc(e.message)}</div>`;
   }
@@ -667,11 +698,6 @@ document.getElementById("searchForm").addEventListener("submit", (e) => {
   navigate(`/search?q=${enc(q)}`);
 });
 
-function viewNotFound() {
-  document.title = "Not found · Skills Explorer";
-  app.innerHTML = `<div class="empty"><h1>Not found</h1><p class="muted">There's nothing at ${esc(location.pathname)}.</p><a class="btn" href="/">Back to the index</a></div>`;
-}
-
 function navigate(url) {
   history.pushState(null, "", url);
   route();
@@ -683,7 +709,7 @@ document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
   if (!a || a.target === "_blank" || a.hasAttribute("download") || a.origin !== location.origin) return;
   const href = a.getAttribute("href");
-  if (!href.startsWith("/") || href.startsWith("//") || href.startsWith("/api/") || href.startsWith("/flows/")) return;
+  if (!href.startsWith("/") || href.startsWith("//") || !clientRendered(a.pathname)) return; // server pages load normally
   e.preventDefault();
   if (href === `${location.pathname}${location.search}`) route();
   else navigate(href);

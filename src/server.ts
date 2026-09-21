@@ -2,13 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { etag } from "hono/etag";
 import { config } from "./config.ts";
 import { SkillIndex, type Skill } from "./db.ts";
 import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
-import { PageRenderer } from "./pages.ts";
+import { installCommands, PAGE_SIZE, PageRenderer, type SearchQuery } from "./pages.ts";
 import { createRater } from "./scores/rater.ts";
 import { ScoreService } from "./scores/jobs.ts";
 import { StarStore } from "./stars.ts";
@@ -58,7 +59,25 @@ const FLOW_CSP = [
   "img-src data:",
   "form-action 'none'",
   "base-uri 'none'",
+  "frame-ancestors 'self'",
 ].join("; ");
+
+/** Headers every response carries. Flow pages set their own, stricter Content-Security-Policy. */
+const SECURITY_HEADERS: Record<string, string> = {
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+};
+const PAGE_CSP = "frame-ancestors 'self'; object-src 'none'; base-uri 'self'";
+
+/** How long browsers and the edge may keep each kind of response. */
+function cacheControl(path: string): string | null {
+  if (path.startsWith("/api/") || path.startsWith("/flows/") || path === "/favorites") return null;
+  if (path === "/") return "public, max-age=60, stale-while-revalidate=86400"; // the Discover list is a fresh random pick
+  if (/\.(js|css|png|ico|svg)$/.test(path)) return "public, max-age=600, stale-while-revalidate=86400";
+  return "public, max-age=300, stale-while-revalidate=86400";
+}
 
 /** Lets the detail page size the iframe to the flow's content. */
 const HEIGHT_REPORTER = `<script>(function(){function post(){try{parent.postMessage({type:"skills-explorer:flow-height",height:document.documentElement.scrollHeight},"*")}catch(e){}}if(window.ResizeObserver)new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post();})();</script>`;
@@ -111,6 +130,36 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     else log.info("request", fields);
   });
 
+  // Security and caching headers on every response. Headers are added after the handler ran,
+  // so routes that set their own (the flow pages' CSP, the sitemap's cache) keep theirs.
+  app.use("*", async (c, next) => {
+    await next();
+    const h = c.res.headers;
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) if (!h.has(name)) h.set(name, value);
+    if (!c.req.path.startsWith("/flows/")) {
+      if (!h.has("Content-Security-Policy")) h.set("Content-Security-Policy", PAGE_CSP);
+      h.set("X-Frame-Options", "SAMEORIGIN");
+    }
+    const cache = cacheControl(c.req.path);
+    if (cache && c.res.status === 200 && !h.has("Cache-Control")) h.set("Cache-Control", cache);
+  });
+  // Conditional requests for the rendered pages and the sitemap.
+  for (const path of ["/", "/search", "/skills", "/about", "/safety", "/sitemap.xml", "/skill/*"]) app.use(path, etag());
+
+  /** One page of search results with the total, for the listing pages and the JSON API. */
+  const searchPage = (query: SearchQuery) => {
+    const page = Math.max(1, Math.floor(query.page ?? 1));
+    const q = query.q ?? "";
+    return { results: idx().search(q, { ...query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }), total: idx().searchCount(q, query), page, pageSize: PAGE_SIZE };
+  };
+  const readQuery = (c: { req: { query(name: string): string | undefined } }): SearchQuery => ({
+    q: c.req.query("q") || undefined,
+    tag: c.req.query("tag") || undefined,
+    collection: c.req.query("collection") || undefined,
+    repo: c.req.query("repo") || undefined,
+    page: Number(c.req.query("page")) || 1,
+  });
+
   app.get("/api/config", (c) =>
     c.json({
       flowModel: opts.generator.model,
@@ -148,11 +197,9 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   });
 
   app.get("/api/search", (c) => {
-    const q = c.req.query("q") ?? "";
-    const tag = c.req.query("tag") || undefined;
-    const collection = c.req.query("collection") || undefined;
-    const repo = c.req.query("repo") || undefined;
-    return c.json({ q, tag, collection, repo, results: withSafety(idx().search(q, { tag, collection, repo })) });
+    const query = readQuery(c);
+    const { results, ...paging } = searchPage(query);
+    return c.json({ q: query.q ?? "", tag: query.tag, collection: query.collection, repo: query.repo, ...paging, results: withSafety(results) });
   });
 
   app.get("/api/tags", (c) => c.json(idx().tagCounts()));
@@ -185,6 +232,8 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
       safety: await scores.status(skill.slug),
       stars: stars.get(skill.slug),
       repoSkillCount: idx().countByRepo(skill.repoUrl),
+      related: withSafety(idx().related(skill)),
+      install: installCommands(skill),
     });
   });
 
@@ -232,9 +281,16 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   app.get("/", (c) => c.html(pages.home({ discover: idx().random(12), collections: idx().collections(), total: idx().count() })));
 
   app.get("/search", (c) => {
-    const query = { q: c.req.query("q") || undefined, tag: c.req.query("tag") || undefined, collection: c.req.query("collection") || undefined, repo: c.req.query("repo") || undefined };
-    return c.html(pages.search(query, idx().search(query.q ?? "", query)));
+    const query = readQuery(c);
+    const data = searchPage(query);
+    // A tag, collection or repository nobody has is a missing page, not an empty listing to index.
+    const missing = data.total === 0 && !query.q && Boolean(query.tag || query.collection || query.repo);
+    return c.html(pages.search(query, data), missing ? 404 : 200);
   });
+
+  app.get("/skills", (c) => c.html(pages.allSkills(idx().all())));
+  app.get("/about", (c) => c.html(pages.about(idx().count())));
+  app.get("/safety", (c) => c.html(pages.safety()));
 
   app.get("/favorites", (c) => c.html(pages.favorites()));
 
@@ -242,7 +298,7 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
     const slug = c.req.param("slug");
     const skill = idx().getBySlug(slug);
     if (!skill) return c.html(pages.notFound(`"${slug}" isn't in the index. It may have been renamed or removed.`), 404);
-    return c.html(pages.skill(skill, skillLinks(skill)));
+    return c.html(pages.skill(skill, skillLinks(skill), { related: idx().related(skill), safety: scores.summaries()[skill.slug] }));
   });
 
   app.get("/sitemap.xml", (c) => {

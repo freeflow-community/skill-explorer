@@ -12,7 +12,7 @@ import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../
 import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
 import { buildInventory, classifyFile, scanSources, scoreLevels, type CategoryKey, type Level } from "../src/scores/scan.ts";
-import { PageRenderer } from "../src/pages.ts";
+import { installCommands, PAGE_SIZE, PageRenderer, summary } from "../src/pages.ts";
 import { createApp, IndexHolder } from "../src/server.ts";
 import { StarStore } from "../src/stars.ts";
 import { LocalBlobStore } from "../src/storage.ts";
@@ -244,6 +244,56 @@ test("HTTP API: stars, popular tab and favourites lookup", async () => {
   assert.deepEqual((await (await app.request("/api/popular")).json()).results.map((s: { slug: string }) => s.slug), ["provision-cloud-agent"]);
 });
 
+test("listings page through every skill with real links, and related skills share tags", async () => {
+  const dir = tmp();
+  const index = new SkillIndex(join(dir, "i.db"));
+  for (let i = 0; i < PAGE_SIZE + 5; i++) {
+    index.upsert({ name: `skill-${String(i).padStart(3, "0")}`, description: `Skill number ${i}`, collection: i < 3 ? "first" : null,
+      repoUrl: "https://github.com/acme/many", repoRef: "main", path: `s/${i}`, tags: i % 2 ? ["odd"] : ["even"] });
+  }
+  index.close();
+  const holder = new IndexHolder(join(dir, "i.db"));
+  const store = new LocalBlobStore(join(dir, "blobs"));
+  const generator = new StubFlowGenerator();
+  const flows = new FlowService({ store, generator, jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const scores = new ScoreService({ store, rater: new StubRater(0), jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }), scores, pages: new PageRenderer("https://example.test") });
+
+  const first = await (await app.request("/search")).text();
+  assert.match(first, /<title>All 105 agent skills, A to Z · Skills Explorer<\/title>/);
+  assert.match(first, /<a rel="next" href="\/search\?page=2">Next<\/a>/);
+  assert.doesNotMatch(first, /skill-104/, "the second page's skills are not on the first");
+  const second = await app.request("/search?page=2");
+  const secondHtml = await second.text();
+  assert.match(secondHtml, /<link rel="canonical" href="https:\/\/example.test\/search\?page=2">/);
+  assert.match(secondHtml, /<a rel="prev" href="\/search">Previous<\/a>/);
+  assert.match(secondHtml, /<a href="\/skill\/skill-104">/);
+  assert.match(secondHtml, /<title>All 105 agent skills, A to Z, page 2 of 2 · Skills Explorer<\/title>/);
+  const api = await (await app.request("/api/search?page=2")).json();
+  assert.equal(api.total, 105);
+  assert.equal(api.results.length, 5);
+  assert.match(await (await app.request("/sitemap.xml")).text(), /<loc>https:\/\/example.test\/search\?page=2<\/loc>/);
+
+  const related = holder.current.related(holder.current.getBySlug("skill-001")!);
+  assert.ok(related.length > 0 && related.length <= 6);
+  assert.ok(related.every((s) => s.tags.includes("odd") || s.collection === "first"), "shared tags or collection first");
+  assert.ok(!related.some((s) => s.slug === "skill-001"), "never itself");
+  const detail = await (await app.request("/api/skills/skill-001")).json();
+  assert.equal(detail.related.length, related.length);
+  assert.equal(detail.install.cli, "npx skills add acme/many --skill skill-001");
+});
+
+test("summaries end at a sentence or clause, and install commands quote what needs it", () => {
+  assert.equal(summary("Short and sweet."), "Short and sweet.");
+  const long = "Build and configure Laravel applications, including creating Eloquent models and relationships, implementing Sanctum authentication, configuring Horizon queues, designing RESTful APIs, and building interfaces with Livewire";
+  const cut = summary(long, 120);
+  assert.ok(cut.length <= 121 && cut.endsWith(".") && !cut.includes("…"), cut);
+  assert.equal(summary("First sentence is short. Then a very long second sentence that goes on and on well past the limit we set here.", 60), "First sentence is short.");
+  const cmds = installCommands({ id: 1, slug: "x", name: "My Skill", description: "", collection: null, repoUrl: "https://github.com/o/r", repoRef: "dev", path: "", tags: [], createdAt: "", updatedAt: "" });
+  assert.equal(cmds.cli, "npx skills add o/r --skill 'My Skill'");
+  assert.equal(cmds.manual, "git clone --depth 1 --branch dev https://github.com/o/r\ncp -r r ~/.claude/skills/'My Skill'");
+});
+
 test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", async () => {
   const dir = tmp();
   const dbPath = join(dir, "i.db");
@@ -260,20 +310,29 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   const home = await app.request("/");
   assert.equal(home.status, 200);
   const homeHtml = await home.text();
-  assert.match(homeHtml, /<title>Skills Explorer<\/title>/);
+  assert.match(homeHtml, /<title>Agent Skills Directory for Claude Code &amp; Codex · Skills Explorer<\/title>/);
   assert.match(homeHtml, /<link rel="canonical" href="https:\/\/example.test\/">/);
   assert.match(homeHtml, /<a href="\/skill\/review-pr">/, "crawlers can reach every skill from the home page");
+  assert.match(homeHtml, /"@type":"WebSite"[^<]*"urlTemplate":"https:\/\/example.test\/search\?q=\{search_term_string\}"/, "sitelinks search box");
+  assert.match(homeHtml, /"@type":"Organization"/);
+  assert.match(homeHtml, /<footer class="site-foot">[\s\S]*href="\/skills"[\s\S]*href="\/about"[\s\S]*href="\/safety"/, "every page links the hub pages");
   assert.doesNotMatch(homeHtml, /<!--page:(head|body)-->/, "the markers are consumed");
   assert.match(homeHtml, /<script src="\/app.js" type="module">/, "the client app still loads over the pre-rendered page");
 
   const skill = await app.request("/skill/review-pr");
   assert.equal(skill.status, 200);
   const skillHtml = await skill.text();
-  assert.match(skillHtml, /<title>review-pr · Skills Explorer<\/title>/);
+  assert.match(skillHtml, /<title>review-pr: Claude Code skill by acme · Skills Explorer<\/title>/);
   assert.match(skillHtml, /<meta name="description" content="[^"]+">/);
+  assert.doesNotMatch(skillHtml, /<meta name="description" content="[^"]*…/, "descriptions are whole sentences");
   assert.match(skillHtml, /<link rel="canonical" href="https:\/\/example.test\/skill\/review-pr">/);
-  assert.match(skillHtml, /<meta property="og:title" content="review-pr">/);
+  assert.match(skillHtml, /<meta property="og:title" content="review-pr: Claude Code skill by acme">/);
   assert.match(skillHtml, /href="https:\/\/github.com\/acme\/skills\/blob\/main\/review-pr\/SKILL.md"/);
+  assert.match(skillHtml, /<h2 id="install">Install<\/h2>[\s\S]*npx skills add acme\/skills --skill review-pr/, "install command");
+  assert.match(skillHtml, /cp -r skills\/review-pr ~\/.claude\/skills\/review-pr/, "manual copy");
+  assert.match(skillHtml, /<h2 id="safety">Safety box score<\/h2>[\s\S]*href="\/safety"/, "links the methodology");
+  assert.match(skillHtml, /"@type":"BreadcrumbList"/);
+  assert.match(skillHtml, /"@type":"SoftwareSourceCode"[^<]*"codeRepository":"https:\/\/github.com\/acme\/skills"/);
 
   const missing = await app.request("/skill/nope");
   assert.equal(missing.status, 404);
@@ -283,9 +342,41 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   const tagged = await app.request("/search?tag=aws");
   const taggedHtml = await tagged.text();
   assert.match(taggedHtml, /<link rel="canonical" href="https:\/\/example.test\/search\?tag=aws">/, "tag listings are indexable");
+  assert.match(taggedHtml, /<title>Skills tagged aws: 1 agent skill for Claude Code · Skills Explorer<\/title>/);
   assert.match(taggedHtml, /<a href="\/skill\/provision-cloud-agent">/);
+  assert.match(taggedHtml, /"@type":"CollectionPage"[^<]*"numberOfItems":1/);
   assert.match(await (await app.request("/search?q=railway")).text(), /noindex/, "free-text searches are not");
   assert.match(await (await app.request("/favorites")).text(), /noindex/);
+  const collection = await (await app.request("/search?collection=cloud")).text();
+  assert.match(collection, /<title>cloud collection: 1 agent skill · Skills Explorer<\/title>/);
+  assert.match(collection, /<meta name="description" content="1 agent skill in the cloud collection from acme\/cloud-agents: provision-cloud-agent\./);
+  const empty = await app.request("/search?collection=nope");
+  assert.equal(empty.status, 404, "an unknown collection is a missing page, not an empty indexable one");
+  assert.match(await empty.text(), /noindex/);
+
+  // Hub pages: every skill is a link away, and the about and methodology pages are real content.
+  const az = await app.request("/skills");
+  assert.equal(az.status, 200);
+  const azHtml = await az.text();
+  assert.match(azHtml, /<h2 id="P">P<\/h2><ul class="az-list"><li><a href="\/skill\/provision-cloud-agent"/);
+  assert.match(azHtml, /<a href="\/skill\/review-pr"/);
+  const about = await (await app.request("/about")).text();
+  assert.match(about, /<h2 id="what-is-a-skill">What is an agent skill\?<\/h2>/);
+  assert.match(about, /2 agent skills/);
+  const safety = await (await app.request("/safety")).text();
+  assert.match(safety, /Instruction hijack surface/, "categories come from the scoring code");
+  assert.match(safety, /<th scope="row">B<\/th><td>Low risk<\/td>/);
+
+  // Security and caching headers on pages and static files, not on API responses.
+  assert.equal(skill.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains");
+  assert.equal(skill.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(skill.headers.get("x-frame-options"), "SAMEORIGIN");
+  assert.match(skill.headers.get("content-security-policy")!, /frame-ancestors 'self'/);
+  assert.equal(skill.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
+  assert.match(skill.headers.get("etag")!, /^W?\/?"/);
+  assert.equal((await app.request("/skill/review-pr", { headers: { "if-none-match": skill.headers.get("etag")! } })).status, 304);
+  assert.equal((await app.request("/api/home")).headers.get("cache-control"), null);
+  assert.equal(home.headers.get("cache-control"), "public, max-age=60, stale-while-revalidate=86400");
 
   const sitemap = await app.request("/sitemap.xml");
   assert.equal(sitemap.status, 200);
@@ -293,6 +384,7 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   const xml = await sitemap.text();
   assert.match(xml, /<loc>https:\/\/example.test\/skill\/review-pr<\/loc>/);
   assert.match(xml, /<loc>https:\/\/example.test\/skill\/provision-cloud-agent<\/loc>/);
+  for (const path of ["/skills", "/about", "/safety", "/search"]) assert.match(xml, new RegExp(`<loc>https://example.test${path}</loc>`));
   assert.match(await (await app.request("/robots.txt")).text(), /Sitemap: https:\/\/example.test\/sitemap.xml/);
 
   // The shell no longer carries a hash router: no internal link uses "#/".
