@@ -92,6 +92,12 @@ export class JobQueue {
     return r ? toJob(r) : null;
   }
 
+  /** How many jobs are queued or running right now, across every slug. */
+  pending(): number {
+    const r = this.db.prepare(`SELECT count(*) AS n FROM ${this.table} WHERE status IN ('queued', 'running')`).get() as { n: number | bigint };
+    return Number(r.n);
+  }
+
   /** The queued or running job for a slug, if any. */
   active(slug: string): Job | null {
     const job = this.latest(slug);

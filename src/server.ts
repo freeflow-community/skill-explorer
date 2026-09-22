@@ -93,6 +93,18 @@ function skillLinks(s: Skill) {
   return { tree, skillMd };
 }
 
+const BOT_AGENT = /bot|crawler|spider|slurp|headlesschrome|preview|scrapy|python-requests|feedfetcher/i;
+
+/**
+ * Whether a request looks like a person browsing, used to decide if opening a skill should
+ * queue its safety score. Crawlers walk every skill page and each rating costs a model call,
+ * so only browser-shaped agents count.
+ */
+export function looksLikeVisitor(userAgent: string | undefined): boolean {
+  const ua = (userAgent ?? "").trim();
+  return ua.startsWith("Mozilla/") && !BOT_AGENT.test(ua);
+}
+
 function tokenMatches(header: string | undefined, token: string): boolean {
   const given = Buffer.from((header ?? "").replace(/^Bearer\s+/i, ""));
   const want = Buffer.from(token);
@@ -225,11 +237,13 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
   app.get("/api/skills/:slug", async (c) => {
     const skill = idx().getBySlug(c.req.param("slug"));
     if (!skill) return c.json({ error: "No skill with that name is in the index" }, 404);
+    // Opening a skill nobody has rated queues its box score; the panel shows the job and polls it.
+    const safety = looksLikeVisitor(c.req.header("user-agent")) ? await scores.autoRate(skill.slug) : await scores.status(skill.slug);
     return c.json({
       skill,
       links: skillLinks(skill),
       flow: await flows.status(skill.slug),
-      safety: await scores.status(skill.slug),
+      safety,
       stars: stars.get(skill.slug),
       repoSkillCount: idx().countByRepo(skill.repoUrl),
       related: withSafety(idx().related(skill)),
