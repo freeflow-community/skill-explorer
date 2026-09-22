@@ -1,6 +1,6 @@
 ---
 name: post-skill-to-x
-description: Find an interesting agent skill in the skillexplorer.dev index, work out what is genuinely worth saying about it, and post that to X from Scott's account (@persingerscott). Use when asked to post/tweet about a skill, to promote a skill on X, or to do the day's skill post. Always drafts first and waits for approval before posting.
+description: Find an interesting agent skill in the skillexplorer.dev index, work out what is genuinely worth saying about it, and post that to X from Scott's account (@persingerscott). Use when asked to post/tweet about a skill, to promote a skill on X, or to do the day's skill post. Runs end to end on its own: picks the skill, writes the options, takes the most casual one and posts it without checking in.
 ---
 
 # Posting about a skill on X
@@ -9,7 +9,14 @@ One post, about one skill, that gives a reader something they didn't know. The a
 real person's, so the bar is: would someone who follows a lot of AI tooling accounts stop on
 this? If the honest answer is no, pick a different skill rather than writing it up anyway.
 
-**You never post without approval.** Draft, show it, wait. The human says go, then you post.
+**You post on your own.** Pick the skill, write the options, take the most casual one and send
+it. Don't ask, don't wait, don't post the drafts for a verdict first — Scott has delegated the
+whole run. Tell him what went out once it's up.
+
+Nobody reads it before it's public, so the accuracy rules in step 3 are the only check left.
+They are not style notes: every claim comes from the SKILL.md, and you never @ anyone whose
+handle you haven't confirmed. If a draft needs a fact you can't source, that draft doesn't go
+out — pick another angle, or another skill.
 
 ## 1. Pick a skill
 
@@ -73,18 +80,31 @@ Shape:
 - Never invent a capability the SKILL.md doesn't claim. If you're unsure it does the thing,
   it doesn't go in the post.
 
-Voice: plain, specific, a little dry. The reader is smart and has seen a hundred AI
-threads today. Say the interesting thing and stop — no "game changer", no "🚀", no
-"I've been exploring…", no thread unless the human asks for one.
+Voice: casual, specific, a little dry — a person typing a thought, not an announcement.
+Contractions, plain words, the shape of talking. The reader is smart and has seen a hundred
+AI threads today. Say the interesting thing and stop.
+
+Casual is not hype, and this is the distinction the whole voice turns on. "trailofbits
+shipped a tarot skill" is casual. "🚀 This changes everything" is hype. Hype is still out:
+no "game changer", no "🚀", no "I've been exploring…", no thread.
 
 Write two or three options in different directions rather than one and a polish pass. It's
-cheap, and the human picks faster from a spread.
+cheap, and you need a spread to choose from in the next step.
 
-## 4. Show the draft, wait
+## 4. Take the most casual one
 
-Post the options with the skill's name, its link, and one line on why you picked it. Then
-stop and wait for a real answer. Silence, a background notification, or your own summary of
-what you'd do next are not approval.
+Of the options you wrote, send the one that sounds most like a person talking — the one you'd
+actually say out loud. That's the tiebreak, and it's yours to call.
+
+Two things override it, because a post that's wrong is worse than a post that's stiff:
+
+- It has to survive the step 3 accuracy rules. Every claim traceable to the SKILL.md, the
+  owner credited, no unconfirmed @.
+- It still has to say what the skill is *for*. Casual that leaves a reader with no idea what
+  the thing does is just vague — pick the next one down.
+
+If the most casual option fails either, take the next. If they all do, go back to step 3 and
+write better ones; don't ship the least bad.
 
 ## 5. Post it
 
@@ -108,7 +128,11 @@ await p.click('[data-testid="tweetButton"]');
 
 Then **verify it actually went out**: load `https://x.com/persingerscott` and confirm the
 post is at the top with the card attached. A composer that silently failed looks exactly
-like one that worked. Screenshot it for the human.
+like one that worked, and with nobody watching the run, this check is the only thing that
+tells the two apart. Mind the pinned post — the newest one may be second.
+
+Then report back: the text you sent, the status URL, and a screenshot. That's a record of
+what went out in Scott's name, not a request for a verdict — the post is already live.
 
 If it posted, append one line to `posted.jsonl`:
 
@@ -116,7 +140,11 @@ If it posted, append one line to `posted.jsonl`:
 {"slug":"...","posted_at":"2026-09-22T02:40:00Z","url":"https://x.com/persingerscott/status/...","text":"..."}
 ```
 
-## Not your call
+## Still not your call
 
-Deleting or editing an existing post, replying as the human to someone else, following,
-liking, or DMing. Ask first — every one of those is the human's voice in public.
+Posting about a skill is delegated. Nothing else is. Ask first before deleting or editing an
+existing post, replying as Scott to someone else, following, liking, or DMing.
+
+Those stay gated for a reason the new autonomy doesn't touch: a fresh post is yours to get
+right and easy to answer for, while the rest either alters a record Scott already stands
+behind or pulls a specific stranger into a conversation on his behalf.
