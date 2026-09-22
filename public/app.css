@@ -294,3 +294,43 @@ h2:hover .anchor, .anchor:focus-visible { opacity: 1; }
   .search { order: 3; flex-basis: 100%; }
   .add-skills { margin-left: auto; }
 }
+
+/* server-rendered pages the client leaves alone: about, safety, A to Z, and any page before hydration */
+.ssr-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.wrap > pre, .prose pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 0; font-size: 0.86rem; line-height: 1.5; }
+.wrap > dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+.wrap > dl dt { color: var(--muted); }
+.wrap > dl dd { margin: 0; overflow-wrap: anywhere; }
+.prose { max-width: 72ch; display: flex; flex-direction: column; gap: 16px; }
+.prose h2 { margin-top: 12px; }
+.prose ul, .prose ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: 0.92rem; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.prose th, .prose td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.prose th[scope="row"] { font-weight: 600; white-space: nowrap; }
+.prose thead th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.az-nav { display: flex; flex-wrap: wrap; gap: 4px 10px; font-family: var(--display); font-weight: 700; }
+.az-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 16px; }
+.az-list a { overflow-wrap: anywhere; }
+
+/* install block and related skills on the detail page */
+.install { display: flex; flex-direction: column; gap: 10px; }
+.install pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 0; font-size: 0.86rem; line-height: 1.5; }
+.install p { font-size: 0.94rem; }
+.related .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* listing pager: real links so every page is a crawl away */
+.pager { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding-top: 8px; font-size: 0.94rem; }
+.pager-pages { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.pager strong { color: var(--ink); }
+
+/* footer */
+.site-foot { border-top: 1px solid var(--line); background: var(--surface); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.site-foot-inner { max-width: 1160px; margin: 0 auto; padding: 16px; display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.88rem; }
+.site-foot a { color: var(--muted); text-decoration: none; }
+.site-foot a:hover { color: var(--accent); text-decoration: underline; }
+
+@media (max-width: 860px) {
+  .related .cards { grid-template-columns: 1fr; }
+  .wrap > dl { grid-template-columns: 1fr; gap: 2px; }
+  .wrap > dl dd { margin-bottom: 8px; }
+}

@@ -4,9 +4,13 @@ A browsable index of agent skills (`SKILL.md` files) from GitHub, with an intera
 
 ![A skill's visual flow: the MCP Server Blueprint page, with a workflow rail, setup pills and an overview of the stages](docs/hero.png)
 
-- **Home**: newest skills, a tag cloud, collections, and search (matches skill names and descriptions).
+- **Home**: a random selection of skills to discover (and the most-starred ones), a tag cloud, collections, and search (matches skill names and descriptions).
 - **Skill page**: name, description, repository, path, branch, collection and tags, then the skill's safety box score and its visual flow. Each is built on demand by its own button (**Rate safety**, **Build visual flow**) as a background job; the page shows a spinner and polls until the result is ready.
 - **Safety box score**: a grade from A (minimal risk) to F (high risk) for what installing the skill lets an agent do, shown in a box score panel on the skill page once rated. See [Safety box scores](#safety-box-scores).
+
+## URLs and search indexing
+
+Pages have real paths: `/`, `/skill/<slug>`, `/search?tag=…` (or `collection=`, `repo=`, `q=`) and `/favorites`. The server renders each one with its title, description, canonical link and a plain-HTML copy of the content, so crawlers and link previews see the page without running the client script, which then takes over in the browser. `/sitemap.xml` lists the home page, every skill and every collection; `/robots.txt` points to it and keeps `/api/`, `/flows/` and `/favorites` out. Free-text search results are marked `noindex`. Set `SITE_URL` to the public origin (default `https://skillexplorer.dev`) so canonical links and the sitemap are right. Old `/#/skill/<slug>` links still work: the client rewrites them to the path form on load.
 
 ## Run it
 

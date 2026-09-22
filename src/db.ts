@@ -203,12 +203,17 @@ export class SkillIndex {
     return (this.db.prepare(`${SELECT} ORDER BY s.created_at DESC, s.id DESC LIMIT ?`).all(limit) as Row[]).map(toSkill);
   }
 
+  /** A fresh random pick each call, for the home page's Discover list. */
+  random(limit = 12): Skill[] {
+    return (this.db.prepare(`${SELECT} ORDER BY RANDOM() LIMIT ?`).all(limit) as Row[]).map(toSkill);
+  }
+
   all(): Skill[] {
     return (this.db.prepare(`${SELECT} ORDER BY s.name COLLATE NOCASE`).all() as Row[]).map(toSkill);
   }
 
-  /** Every term must appear in the name or description; name matches rank first. */
-  search(q: string, opts: { tag?: string; collection?: string; repo?: string; limit?: number } = {}): Skill[] {
+  /** The WHERE clause and its parameters for a search, shared by the results and count queries. */
+  private searchWhere(q: string, opts: { tag?: string; collection?: string; repo?: string }) {
     const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const where: string[] = [];
     const params: (string | number)[] = [];
@@ -228,17 +233,39 @@ export class SkillIndex {
       where.push("s.repo_url = ?");
       params.push(opts.repo);
     }
+    return { terms, sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+  }
+
+  /** Every term must appear in the name or description; name matches rank first. */
+  search(q: string, opts: { tag?: string; collection?: string; repo?: string; limit?: number; offset?: number } = {}): Skill[] {
+    const { terms, sql: where, params } = this.searchWhere(q, opts);
     const phrase = terms.join(" ");
-    const sql = `${SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    const sql = `${SELECT} ${where}
       ORDER BY CASE
         WHEN ? = '' THEN 3
         WHEN lower(s.name) = ? THEN 0
         WHEN lower(s.name) LIKE ? ESCAPE '\\' THEN 1
         WHEN lower(s.name) LIKE ? ESCAPE '\\' THEN 2
         ELSE 3 END, s.name COLLATE NOCASE
-      LIMIT ?`;
-    params.push(phrase, phrase, `${phrase.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, likeTerm(terms[0] ?? ""), opts.limit ?? 100);
+      LIMIT ? OFFSET ?`;
+    params.push(phrase, phrase, `${phrase.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, likeTerm(terms[0] ?? ""), opts.limit ?? 100, opts.offset ?? 0);
     return (this.db.prepare(sql).all(...params) as Row[]).map(toSkill);
+  }
+
+  /** How many skills a search matches in total, for paging. */
+  searchCount(q: string, opts: { tag?: string; collection?: string; repo?: string } = {}): number {
+    const { sql: where, params } = this.searchWhere(q, opts);
+    return (this.db.prepare(`SELECT count(*) AS n FROM skills s ${where}`).get(...params) as { n: number }).n;
+  }
+
+  /** Skills that share tags with this one, then its collection and repository; deterministic, for the detail page. */
+  related(skill: Skill, limit = 6): Skill[] {
+    const sql = `${SELECT.replace("FROM skills s", `, (SELECT count(*) FROM skill_tags a JOIN skill_tags b ON a.tag = b.tag WHERE a.skill_id = ? AND b.skill_id = s.id) AS shared FROM skills s`)}
+      WHERE s.id != ? AND (shared > 0 OR s.collection = ? OR s.repo_url = ?)
+      ORDER BY shared DESC, (s.collection = ?) DESC, (s.repo_url = ?) DESC, s.name COLLATE NOCASE
+      LIMIT ?`;
+    const coll = skill.collection ?? "";
+    return (this.db.prepare(sql).all(skill.id, skill.id, coll, skill.repoUrl, coll, skill.repoUrl, limit) as Row[]).map(toSkill);
   }
 
   /** How many skills the index holds from one repository. */
