@@ -28,10 +28,16 @@ export function summary(text: string, max = 160): string {
   const t = String(text ?? "").replace(/\s+/g, " ").trim();
   if (t.length <= max) return t;
   let sentences = "";
+  let end = 0;
   for (const m of t.matchAll(/[^.!?]+[.!?]+(?=\s|$)/g)) {
+    // A match that doesn't start where the last one ended means a dot that isn't a sentence
+    // end (p5.js, Fly.io, .png) made the regex skip over text. Keeping it would drop the
+    // opening words, so fall through to trimming instead.
+    if (t.slice(end, m.index).trim()) break;
     const next = `${sentences}${sentences ? " " : ""}${m[0].trim()}`;
     if (next.length > max) break;
     sentences = next;
+    end = m.index + m[0].length;
   }
   if (sentences.length >= 20) return sentences;
   const head = t.slice(0, max);

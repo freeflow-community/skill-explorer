@@ -291,6 +291,19 @@ test("summaries end at a sentence or clause, and install commands quote what nee
   const cut = summary(long, 120);
   assert.ok(cut.length <= 121 && cut.endsWith(".") && !cut.includes("…"), cut);
   assert.equal(summary("First sentence is short. Then a very long second sentence that goes on and on well past the limit we set here.", 60), "First sentence is short.");
+  // A dot that isn't a sentence end (p5.js, Fly.io, .png) must not cost the opening words:
+  // these go straight into og:description, where a card starting mid-word looks broken.
+  for (const [text, starts] of [
+    ["Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration for generative design work.", "Creating algorithmic art"],
+    ["Migrate applications from Heroku, AWS, Render, Railway, Fly.io, or Docker Compose to DigitalOcean App Platform with the least possible downtime.", "Migrate applications"],
+    ["Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks for a poster.", "Create beautiful visual art"],
+  ] as const) {
+    const out = summary(text, 100);
+    assert.ok(out.startsWith(starts), `summary dropped the start of the description: ${out}`);
+  }
+  // Sentences are still preferred when the first one really does start the text.
+  assert.equal(summary("First sentence is short. A second one that runs past the limit we set here for it.", 40), "First sentence is short.");
+
   const cmds = installCommands({ id: 1, slug: "x", name: "My Skill", description: "", collection: null, repoUrl: "https://github.com/o/r", repoRef: "dev", path: "", tags: [], createdAt: "", updatedAt: "" });
   assert.equal(cmds.cli, "npx skills add o/r --skill 'My Skill'");
   assert.equal(cmds.manual, "git clone --depth 1 --branch dev https://github.com/o/r\ncp -r r ~/.claude/skills/'My Skill'");
