@@ -9,6 +9,8 @@ import { FlowService } from "../src/flows/jobs.ts";
 import { validateFlowHtml } from "../src/flows/validate.ts";
 import { guessCollection, isSkillPath, parseRepo, parseSkillMd } from "../src/github.ts";
 import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../src/indexSync.ts";
+import { renderMarkdown } from "../src/markdown.ts";
+import { PreviewService } from "../src/preview.ts";
 import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
 import { buildInventory, classifyFile, scanSources, scoreLevels, type CategoryKey, type Level } from "../src/scores/scan.ts";
@@ -485,6 +487,56 @@ test("opening an unrated skill queues its score for visitors, but not for crawle
   const rated = await (await get("review-pr", "Mozilla/5.0 (Macintosh) Chrome/141.0 Safari/537.36")).json();
   assert.equal(rated.safety.state, "ready");
   assert.equal(rated.safety.job.id, queuedJob.id, "a rated skill is not rated again on the next visit");
+});
+
+test("markdown rendering: blocks, inline marks, and no HTML from the file itself", () => {
+  const html = renderMarkdown(
+    [
+      "# Deploy", "", "Run **setup** with `npm run build` and _care_.", "",
+      "- one", "- two", "  - nested", "", "1. first", "2. second", "",
+      "```sh", "echo '<hi>' && npm i", "```", "",
+      "| Flag | What |", "| --- | --- |", "| `-v` | verbose |", "",
+      "> Careful with this one.", "", "---", "",
+      "See [the docs](https://example.com/a) and [bad](javascript:alert(1)).",
+    ].join("\n"),
+  );
+  assert.match(html, /<h2>Deploy<\/h2>/, "the modal's own title is the h1, so # starts at h2");
+  assert.match(html, /<strong>setup<\/strong>/);
+  assert.match(html, /<em>care<\/em>/);
+  assert.match(html, /<code>npm run build<\/code>/);
+  assert.match(html, /<ul><li>one<\/li><li>two<ul><li>nested<\/li><\/ul><\/li><\/ul>/);
+  assert.match(html, /<ol><li>first<\/li><li>second<\/li><\/ol>/);
+  assert.match(html, /<pre><code class="lang-sh">echo &#39;&lt;hi&gt;&#39; &amp;&amp; npm i<\/code><\/pre>|<pre><code class="lang-sh">echo '&lt;hi&gt;' &amp;&amp; npm i<\/code><\/pre>/);
+  assert.match(html, /<thead><tr><th>Flag<\/th><th>What<\/th><\/tr><\/thead>/);
+  assert.match(html, /<blockquote><p>Careful with this one.<\/p><\/blockquote>/);
+  assert.match(html, /<hr>/);
+  assert.match(html, /<a href="https:\/\/example.com\/a" target="_blank" rel="noopener nofollow">the docs<\/a>/);
+  assert.match(html, /and \[bad\]\(javascript:alert\(1\)\)/, "a link we won't emit is left as the text the file wrote");
+  assert.doesNotMatch(html, /href="javascript:/);
+
+  // A SKILL.md comes from a stranger's repository, so nothing in it may reach the DOM as markup.
+  const hostile = renderMarkdown('<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>\n');
+  assert.doesNotMatch(hostile, /<img|<script/);
+  assert.match(hostile, /&lt;script&gt;/);
+});
+
+test("SKILL.md preview: frontmatter rows, rendered body, and one fetch per cache window", async () => {
+  const index = seed(join(tmp(), "i.db"));
+  const skill = index.getBySlug("review-pr")!;
+  let reads = 0;
+  const previews = new PreviewService({
+    read: async () => {
+      reads++;
+      return "---\nname: review-pr\ntags:\n  - github\n  - qa\n---\n# Review\n\nOpen the PR.\n";
+    },
+  });
+  const p = await previews.get(skill, "https://github.com/acme/skills/blob/main/review-pr/SKILL.md");
+  assert.equal(p.path, "review-pr/SKILL.md");
+  assert.deepEqual(p.frontmatter, [{ key: "name", value: "review-pr" }, { key: "tags", value: "github, qa" }]);
+  assert.match(p.html, /<h2>Review<\/h2>\n<p>Open the PR.<\/p>/);
+  assert.doesNotMatch(p.html, /name: review-pr/, "frontmatter is listed on its own, not left in the body");
+  await previews.get(skill, "x");
+  assert.equal(reads, 1, "a second open inside the cache window doesn't hit GitHub again");
 });
 
 test("safety scan: signals, inventory and file kinds", () => {
