@@ -9,6 +9,7 @@ import { createGenerator, type FlowGenerator } from "./flows/generator.ts";
 import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
+import { CardService } from "./og.ts";
 import { installCommands, PAGE_SIZE, PageRenderer, type SearchQuery } from "./pages.ts";
 import { PreviewService } from "./preview.ts";
 import { createRater } from "./scores/rater.ts";
@@ -112,13 +113,26 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
+/** The card renderer, or null if its fonts are missing so the site falls back to /og.png. */
+function cardService(): CardService | null {
+  try {
+    return new CardService(getStore());
+  } catch (error) {
+    log.warn("open graph cards are off", { error });
+    return null;
+  }
+}
+
 export function createApp(opts: {
   index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService;
-  pages?: PageRenderer; previews?: PreviewService;
+  pages?: PageRenderer; previews?: PreviewService; cards?: CardService | null;
 }) {
   const { index, flows, stars, scores } = opts;
   const pages = opts.pages ?? new PageRenderer(config.siteUrl);
   const previews = opts.previews ?? new PreviewService();
+  // Cards need their fonts on disk. Without them the site still runs, just with no og:image,
+  // which is a missing picture rather than a missing page.
+  const cards = opts.cards !== undefined ? opts.cards : cardService();
   const app = new Hono();
   const idx = () => index.current;
   /** Attach each skill's safety grade summary (when it has been rated). */
@@ -332,6 +346,24 @@ export function createApp(opts: {
     if (!skill) return c.html(pages.notFound(`"${slug}" isn't in the index. It may have been renamed or removed.`), 404);
     return c.html(pages.skill(skill, skillLinks(skill), { related: idx().related(skill), safety: scores.summaries()[skill.slug] }));
   });
+
+  // Open Graph cards. Every skill gets its own, drawn from its name, owner, description, tags
+  // and safety grade; the rest of the site shares /og.png. Both are PNG because X, Slack and
+  // iMessage all refuse an SVG og:image.
+  if (cards) {
+    const png = (body: Uint8Array<ArrayBuffer>, cache: string) =>
+      new Response(body, { status: 200, headers: { "Content-Type": "image/png", "Cache-Control": cache } });
+
+    app.get("/og.png", (c) => png(cards.site(idx().count()), "public, max-age=3600"));
+
+    app.get("/og/:file", async (c) => {
+      const file = c.req.param("file");
+      if (!file.endsWith(".png")) return c.notFound();
+      const skill = idx().getBySlug(file.slice(0, -4));
+      if (!skill) return c.notFound();
+      return png(await cards.skill(skill, scores.summaries()[skill.slug]), "public, max-age=86400, stale-while-revalidate=604800");
+    });
+  }
 
   app.get("/sitemap.xml", (c) => {
     c.header("Cache-Control", "public, max-age=3600");

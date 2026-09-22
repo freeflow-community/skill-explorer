@@ -3,13 +3,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { SkillIndex } from "../src/db.ts";
+import { SkillIndex, type Skill } from "../src/db.ts";
 import { extractHtml, StubFlowGenerator } from "../src/flows/generator.ts";
 import { FlowService } from "../src/flows/jobs.ts";
 import { validateFlowHtml } from "../src/flows/validate.ts";
 import { guessCollection, isSkillPath, parseRepo, parseSkillMd } from "../src/github.ts";
 import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../src/indexSync.ts";
 import { renderMarkdown } from "../src/markdown.ts";
+import { CardFonts, CardService, cardKey, cardSvg } from "../src/og.ts";
 import { PreviewService } from "../src/preview.ts";
 import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
@@ -639,4 +640,98 @@ test("safety ratings run in the background, store the report and keep a grade su
   assert.equal(failed.status, "failed");
   assert.match(failed.error!, /Could not read/);
   assert.equal(failed.progress, "Failed while fetching sources");
+});
+
+test("open graph cards: wrapping, layout budget and the served route", async () => {
+  const fonts = new CardFonts();
+  const width = 1008; // what cardSvg gives the text column at 1200 wide
+
+  // Measurement tracks the glyphs: a wider string measures wider, and bold measures wider
+  // than regular at the same size.
+  assert.ok(fonts.measure("mmmm", "Gabarito", 800, 40) > fonts.measure("iiii", "Gabarito", 800, 40));
+  assert.ok(fonts.measure("skill", "Gabarito", 800, 40) > fonts.measure("skill", "Gabarito", 400, 40));
+
+  // Hyphenated names break at the hyphens, keeping each hyphen on the line it ends.
+  const wrapped = fonts.wrap("aws-lambda-managed-instances-with-a-very-long-tail", "Gabarito", 800, 76, width, 2);
+  assert.ok(wrapped.length <= 2);
+  assert.ok(wrapped[0]!.endsWith("-"), `expected a hyphen break, got ${wrapped[0]}`);
+  assert.equal(wrapped.join(""), wrapped.join("").replace(/\s/g, ""), "no spaces appear inside a hyphenated name");
+
+  // Every line actually fits, and overflow past the last line is marked with an ellipsis.
+  const long = fonts.wrap("word ".repeat(200), "Atkinson Hyperlegible Next", 400, 27, width, 3);
+  assert.equal(long.length, 3);
+  assert.ok(long.every((l) => fonts.measure(l, "Atkinson Hyperlegible Next", 400, 27) <= width));
+  assert.ok(long[2]!.endsWith("…"));
+
+  // fitSize steps the title down until it fits the line budget.
+  assert.equal(fonts.fitSize("short", "Gabarito", 800, [76, 66, 58, 50], width, 1), 76);
+  assert.ok(fonts.fitSize("a-very-long-hyphenated-skill-name-that-will-not-fit", "Gabarito", 800, [76, 66, 58, 50], width, 1) < 76);
+
+  const skill = {
+    slug: "let-fate-decide", name: "let-fate-decide", description: "Draws a tarot spread to break a tie when the prompt is too vague to act on.",
+    collection: null, repoUrl: "https://github.com/trailofbits/skills", repoRef: "main", path: "p", tags: ["analysis", "strategy"],
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+  } as Skill;
+  const safety = { grade: "D", score: 55, label: "Elevated risk", ratedAt: "2026-09-22T00:00:00.000Z" } as const;
+
+  const svg = cardSvg({ title: skill.name, byline: "by trailofbits", body: skill.description, tags: skill.tags, safety }, fonts);
+  assert.match(svg, /let-fate-decide/);
+  assert.match(svg, /by trailofbits/);
+  assert.match(svg, /D · Elevated risk/);
+  assert.match(svg, /#B3261E/, "an elevated grade uses the bad colour, not the ok one");
+
+  // Nothing above the footer may cross its divider, however long the name and description are.
+  const divider = 630 - 40 - 56 - 30 - 34;
+  const baselines = (card: string, role: string) =>
+    [...card.matchAll(new RegExp(`<text [^>]*\\by="([\\d.]+)"[^>]*class="${role}"`, "g"))].map((m) => Number(m[1]));
+  const clears = (card: string, what: string) => {
+    for (const role of ["title", "byline", "body"]) {
+      for (const y of baselines(card, role)) assert.ok(y < divider, `${what}: a ${role} line sits at ${y}, past the divider at ${divider}`);
+    }
+  };
+  assert.equal(baselines(svg, "title").length, 1, "a short name stays on one line");
+  clears(svg, "an ordinary skill");
+
+  // The worst case: a name that needs two lines and a description far too long for what is left.
+  const crowded = cardSvg({ title: "aws-lambda-managed-instances-with-an-unusually-long-name", byline: "by aws", body: "sentence ".repeat(120) }, fonts);
+  // The title gives up size rather than let the description shrink to a single orphan line.
+  assert.equal(baselines(crowded, "title").length, 2, "a long name takes two lines");
+  assert.ok(baselines(crowded, "body").length >= 2, "a crowded card still gets two description lines");
+  clears(crowded, "a crowded skill");
+
+  // The key changes when anything drawn changes, so a stale card can't be served.
+  assert.equal(cardKey(skill, safety), cardKey({ ...skill }, safety));
+  assert.notEqual(cardKey(skill, safety), cardKey({ ...skill, description: "different" }, safety));
+  assert.notEqual(cardKey(skill, safety), cardKey(skill, undefined));
+
+  // Over HTTP: the skill page points at its own card, and the route returns a real PNG.
+  const dir = tmp();
+  const dbPath = join(dir, "i.db");
+  seed(dbPath).close();
+  const holder = new IndexHolder(dbPath);
+  const store = new LocalBlobStore(join(dir, "blobs"));
+  const generator = new StubFlowGenerator();
+  const flows = new FlowService({ store, generator, jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const scores = new ScoreService({ store, rater: new StubRater(0), jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }), scores, pages: new PageRenderer("https://example.test"), cards: new CardService(store, { fonts }) });
+
+  const page = await (await app.request("/skill/review-pr")).text();
+  assert.match(page, /<meta property="og:image" content="https:\/\/example.test\/og\/review-pr.png">/);
+  assert.match(page, /<meta property="og:image:width" content="1200">/);
+  // Pages without their own card keep the shared one.
+  assert.match(await (await app.request("/about")).text(), /<meta property="og:image" content="https:\/\/example.test\/og.png">/);
+
+  const card = await app.request("/og/review-pr.png");
+  assert.equal(card.status, 200);
+  assert.equal(card.headers.get("content-type"), "image/png");
+  const bytes = Buffer.from(await card.arrayBuffer());
+  assert.deepEqual([...bytes.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], "a PNG signature");
+  assert.equal(bytes.readUInt32BE(16), 1200);
+  assert.equal(bytes.readUInt32BE(20), 630);
+
+  // The render is stored under its content key, so a restart serves it without re-rendering.
+  assert.ok(await store.head(cardKey(holder.current.getBySlug("review-pr")!, undefined)));
+  assert.equal((await app.request("/og/nope.png")).status, 404, "an unknown slug has no card");
+  assert.equal((await app.request("/og/review-pr")).status, 404, "only .png is a card");
+  assert.equal((await app.request("/og.png")).status, 200);
 });

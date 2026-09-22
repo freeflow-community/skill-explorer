@@ -58,6 +58,8 @@ export interface PageMeta {
   noindex?: boolean;
   /** Schema.org objects, emitted as one JSON-LD graph. */
   jsonLd?: object[];
+  /** Path to this page's Open Graph card. Pages without their own one share /og.png. */
+  image?: string;
 }
 
 export interface SearchQuery {
@@ -128,7 +130,9 @@ export class PageRenderer {
       `<meta property="og:title" content="${esc(meta.title)}">`,
       `<meta property="og:description" content="${esc(meta.description)}">`,
       `<meta property="og:url" content="${esc(this.url(meta.path))}">`,
-      `<meta property="og:image" content="${esc(this.url("/og.png"))}">`,
+      `<meta property="og:image" content="${esc(this.url(meta.image ?? "/og.png"))}">`,
+      `<meta property="og:image:width" content="1200">`,
+      `<meta property="og:image:height" content="630">`,
       `<meta name="twitter:card" content="summary_large_image">`,
       ...(meta.jsonLd?.length ? [this.jsonLd(meta.jsonLd)] : []),
     ].join("\n  ");
@@ -292,7 +296,7 @@ export class PageRenderer {
         <dt>Updated</dt><dd>${esc(s.updatedAt.slice(0, 10))}</dd>
       </dl>
       ${extras.related.length ? `<h2 id="related">Related skills</h2>${this.skillList(extras.related)}` : ""}`;
-    return this.render({ title, description, path, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s)] }, body);
+    return this.render({ title, description, path, image: `/og/${enc(s.slug)}.png`, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s)] }, body);
   }
 
   search(query: SearchQuery, data: SearchPage): string {
