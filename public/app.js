@@ -335,7 +335,8 @@ async function viewSkill(slug, params = new URLSearchParams()) {
     </section>
     <dl class="meta">
       <div><dt>Repository</dt><dd>${repoLink(s.repoUrl, repoName)} <a class="out" href="${esc(s.repoUrl)}" target="_blank" rel="noopener" title="Open on GitHub" aria-label="Open ${esc(repoName)} on GitHub">↗</a></dd></div>
-      <div><dt>Path</dt><dd><a class="mono" href="${esc(d.links.skillMd)}" target="_blank" rel="noopener">${esc(s.path ? `${s.path}/SKILL.md` : "SKILL.md")}</a></dd></div>
+      <div><dt>Path</dt><dd><a class="mono" href="${esc(d.links.skillMd)}" target="_blank" rel="noopener">${esc(s.path ? `${s.path}/SKILL.md` : "SKILL.md")}</a>
+        <button type="button" class="out preview-btn" data-preview title="Preview this SKILL.md" aria-label="Preview this SKILL.md">👁 Preview</button></dd></div>
       <div><dt>Branch</dt><dd class="mono">${esc(s.repoRef)}</dd></div>
       <div><dt>Collection</dt><dd>${s.collection ? collChip(s.collection) : `<span class="muted">None</span>`}</dd></div>
       <div><dt>Added</dt><dd title="${esc(fullDate(s.createdAt))}">${relTime(s.createdAt)}</dd></div>
@@ -347,6 +348,7 @@ async function viewSkill(slug, params = new URLSearchParams()) {
     </div>
     <section class="flow" id="flow" aria-live="polite"></section>
     ${d.related?.length ? `<section class="section related"><h2>Related skills</h2><div class="cards">${d.related.map(card).join("")}</div></section>` : ""}`;
+  document.querySelector("[data-preview]")?.addEventListener("click", () => openSourceModal(s, d.links.skillMd));
   renderSafety(s, d.safety, myRoute);
   renderFlow(s, d.flow, myRoute);
   // /skill/<slug>?flow (or ?safety) links straight to that panel; the router scrolls there once it's done.
@@ -406,16 +408,55 @@ function boxRows(r) {
       <span class="dots" aria-label="level ${c.level} of 3">${[1, 2, 3].map((i) => `<i class="${i <= c.level ? "on" : ""}"></i>`).join("")}</span></li>`).join("")}</ul>`;
 }
 
-/** The full scorecard in a modal dialog. */
-function openSafetyModal(s, r) {
-  let dlg = document.getElementById("safetyModal");
+/** One reusable <dialog> per kind of modal; clicking the backdrop closes it. */
+function modal(id) {
+  let dlg = document.getElementById(id);
   if (!dlg) {
     dlg = document.createElement("dialog");
-    dlg.id = "safetyModal";
+    dlg.id = id;
     dlg.className = "modal";
     dlg.addEventListener("click", (e) => e.target === dlg && dlg.close());
     document.body.appendChild(dlg);
   }
+  return dlg;
+}
+
+/** The skill's own SKILL.md, frontmatter first, rendered by the server. */
+async function openSourceModal(s, githubUrl) {
+  const dlg = modal("sourceModal");
+  const path = s.path ? `${s.path}/SKILL.md` : "SKILL.md";
+  const gh = `<a href="${esc(githubUrl)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
+  const shell = (note, body) => {
+    dlg.innerHTML = `<div class="modal-head"><div><span class="eyebrow">SKILL.md</span><h2>${esc(s.name)}</h2>
+        <p class="flow-meta mono">${esc(path)}</p><p class="muted small">${note}</p></div>
+        <button type="button" class="btn modal-close" aria-label="Close" data-close>✕</button></div>
+      <div class="modal-body">${body}</div>`;
+    dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());
+  };
+
+  shell(gh, `<p class="muted">Reading it from GitHub…</p>`);
+  dlg.showModal();
+  capture("skill_source_previewed", { skill: s.slug });
+
+  try {
+    const d = await api(`/api/skills/${enc(s.slug)}/source`);
+    if (!dlg.open) return;
+    const front = d.frontmatter.length
+      ? `<dl class="frontmatter">${d.frontmatter.map((f) => `<div><dt>${esc(f.key)}</dt><dd>${esc(f.value)}</dd></div>`).join("")}</dl>`
+      : "";
+    shell(
+      `${(d.bytes / 1024).toFixed(1)} kB · ${gh}`,
+      `<article class="markdown">${front}${d.html || `<p class="muted">This SKILL.md is only frontmatter — it has no body.</p>`}</article>`,
+    );
+  } catch (e) {
+    if (!dlg.open) return;
+    shell(gh, `<div class="note bad">${esc(e.message)}</div><p class="muted">You can still read it on GitHub.</p>`);
+  }
+}
+
+/** The full scorecard in a modal dialog. */
+function openSafetyModal(s, r) {
+  const dlg = modal("safetyModal");
   dlg.innerHTML = `<div class="modal-head"><div><span class="eyebrow">Safety box score</span><h2>${esc(s.name)}</h2>
       <p class="flow-meta">Rated ${relTime(r.ratedAt)} with <span class="mono">${esc(r.model)}</span> from ${r.sourceFiles.length} file${r.sourceFiles.length === 1 ? "" : "s"}</p></div>
       <button type="button" class="btn modal-close" aria-label="Close" data-close>✕</button></div>

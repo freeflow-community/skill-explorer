@@ -10,6 +10,7 @@ import { FlowService } from "./flows/jobs.ts";
 import { ensureLocalIndex, hasUnpushedChanges, pullIndex, remoteIsNewer } from "./indexSync.ts";
 import { createLogger, ms } from "./log.ts";
 import { installCommands, PAGE_SIZE, PageRenderer, type SearchQuery } from "./pages.ts";
+import { PreviewService } from "./preview.ts";
 import { createRater } from "./scores/rater.ts";
 import { ScoreService } from "./scores/jobs.ts";
 import { StarStore } from "./stars.ts";
@@ -111,9 +112,13 @@ function tokenMatches(header: string | undefined, token: string): boolean {
   return given.length === want.length && timingSafeEqual(given, want);
 }
 
-export function createApp(opts: { index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService; pages?: PageRenderer }) {
+export function createApp(opts: {
+  index: IndexHolder; flows: FlowService; generator: FlowGenerator; stars: StarStore; scores: ScoreService;
+  pages?: PageRenderer; previews?: PreviewService;
+}) {
   const { index, flows, stars, scores } = opts;
   const pages = opts.pages ?? new PageRenderer(config.siteUrl);
+  const previews = opts.previews ?? new PreviewService();
   const app = new Hono();
   const idx = () => index.current;
   /** Attach each skill's safety grade summary (when it has been rated). */
@@ -249,6 +254,19 @@ export function createApp(opts: { index: IndexHolder; flows: FlowService; genera
       related: withSafety(idx().related(skill)),
       install: installCommands(skill),
     });
+  });
+
+  /** The skill's own SKILL.md, rendered for the preview modal. */
+  app.get("/api/skills/:slug/source", async (c) => {
+    const skill = idx().getBySlug(c.req.param("slug"));
+    if (!skill) return c.json({ error: "No skill with that name is in the index" }, 404);
+    try {
+      return c.json(await previews.get(skill, skillLinks(skill).skillMd));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log.warn("could not read a skill's SKILL.md for the preview", { slug: skill.slug, error: message });
+      return c.json({ error: `Couldn't read this skill's SKILL.md from GitHub: ${message}` }, 502);
+    }
   });
 
   app.get("/api/skills/:slug/flow", async (c) => {
