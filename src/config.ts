@@ -86,6 +86,14 @@ export const config = {
     concurrency: int("SCORE_CONCURRENCY", 2),
     /** Max characters of skill source (SKILL.md, docs and scripts) sent to the reviewer. */
     sourceBudget: int("SCORE_SOURCE_BUDGET", 200_000),
+    /** Rate a skill the first time a visitor opens it. Every rating is a model call, so it runs on a budget. */
+    auto: {
+      enabled: env("SCORE_AUTO_RATE", "true") !== "false",
+      /** Auto-ratings allowed per hour across all skills (0 disables auto-rating). */
+      perHour: int("SCORE_AUTO_RATE_PER_HOUR", 20),
+      /** Don't auto-rate while this many ratings are already queued or running. */
+      maxPending: int("SCORE_AUTO_RATE_MAX_PENDING", 4),
+    },
   },
 
   /** Skill whose flow the home page shows as an example (empty disables the promo). */

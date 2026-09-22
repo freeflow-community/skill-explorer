@@ -12,7 +12,7 @@ import { hasUnpushedChanges, pullIndex, pushIndex, SyncConflictError } from "../
 import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
 import { buildInventory, classifyFile, scanSources, scoreLevels, type CategoryKey, type Level } from "../src/scores/scan.ts";
-import { createApp, IndexHolder } from "../src/server.ts";
+import { createApp, IndexHolder, looksLikeVisitor } from "../src/server.ts";
 import { StarStore } from "../src/stars.ts";
 import { LocalBlobStore } from "../src/storage.ts";
 
@@ -301,6 +301,42 @@ test("HTTP API: home, search, detail, build and sandboxed flow page", async () =
   assert.equal(graded.results[0].safety.grade, "D");
   const rated = await (await app.request("/api/skills/review-pr")).json();
   assert.equal(rated.safety.state, "ready");
+});
+
+test("opening an unrated skill queues its score for visitors, but not for crawlers", async () => {
+  const dir = tmp();
+  const dbPath = join(dir, "i.db");
+  seed(dbPath).close();
+  const holder = new IndexHolder(dbPath);
+  const generator = new StubFlowGenerator(10);
+  const store = new LocalBlobStore(join(dir, "blobs"));
+  const flows = new FlowService({ store, generator, jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s), loadSources: async () => [] });
+  const scores = new ScoreService({
+    store, rater: new StubRater(50), jobsDbPath: ":memory:",
+    findSkill: (s) => holder.current.getBySlug(s),
+    loadFiles: async () => ({ files: [{ path: "SKILL.md" }], sources: [{ path: "SKILL.md", content: "# x" }] }),
+  });
+  const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }), scores });
+  const get = (slug: string, userAgent: string) => app.request(`/api/skills/${slug}`, { headers: { "user-agent": userAgent } });
+
+  assert.equal(looksLikeVisitor("Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/141.0 Safari/537.36"), true);
+  assert.equal(looksLikeVisitor("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"), false);
+  assert.equal(looksLikeVisitor("curl/8.7.1"), false);
+  assert.equal(looksLikeVisitor(undefined), false);
+
+  const crawled = await (await get("provision-cloud-agent", "Mozilla/5.0 (compatible; bingbot/2.0)")).json();
+  assert.equal(crawled.safety.state, "none", "a crawler walking every page must not run up model calls");
+
+  const visited = await (await get("review-pr", "Mozilla/5.0 (Macintosh) Chrome/141.0 Safari/537.36")).json();
+  assert.ok(["queued", "running"].includes(visited.safety.state), `expected a rating to be queued, got ${visited.safety.state}`);
+  const queuedJob = visited.safety.job;
+  const second = await (await get("review-pr", "Mozilla/5.0 (Macintosh) Chrome/141.0 Safari/537.36")).json();
+  assert.equal(second.safety.job.id, queuedJob.id, "a second visitor joins the rating already in flight");
+
+  assert.equal((await scores.waitFor(queuedJob.id, 5)).status, "succeeded");
+  const rated = await (await get("review-pr", "Mozilla/5.0 (Macintosh) Chrome/141.0 Safari/537.36")).json();
+  assert.equal(rated.safety.state, "ready");
+  assert.equal(rated.safety.job.id, queuedJob.id, "a rated skill is not rated again on the next visit");
 });
 
 test("safety scan: signals, inventory and file kinds", () => {

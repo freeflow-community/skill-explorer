@@ -80,6 +80,8 @@ export class ScoreService {
   private reportCache = new Map<string, { report: SafetyReport | null; at: number }>();
   private summary: Record<string, SafetySummary> = {};
   private summaryLoaded = false;
+  /** When each auto-rating started, so the hourly budget can be counted. */
+  private autoRated: number[] = [];
 
   constructor(opts: {
     store: BlobStore;
@@ -154,6 +156,37 @@ export class ScoreService {
   start(slug: string): ScoreJob {
     if (!this.findSkill(slug)) throw new Error(`Unknown skill: ${slug}`);
     return this.jobs.start(slug, this.rater.model, (ctx) => this.rate(ctx));
+  }
+
+  /**
+   * Rate a skill a visitor opened that nobody has rated yet, and return where it stands.
+   * Every rating is a model call, so this runs on a budget: only skills with no report and
+   * no earlier job, only while the queue is short, and only so many per hour. Skills whose
+   * last rating failed are left alone so a broken one isn't retried on every page view.
+   */
+  async autoRate(slug: string): Promise<ScoreState> {
+    const state = await this.status(slug);
+    const auto = config.score.auto;
+    if (state.state !== "none" || !auto.enabled || auto.perHour <= 0) return state;
+
+    const pending = this.jobs.pending();
+    if (pending >= auto.maxPending) {
+      this.log.debug("not auto-rating: ratings are already queued", { slug, pending, maxPending: auto.maxPending });
+      return state;
+    }
+    const hourAgo = Date.now() - 3_600_000;
+    this.autoRated = this.autoRated.filter((at) => at > hourAgo);
+    if (this.autoRated.length >= auto.perHour) {
+      this.log.warn("not auto-rating: the hourly budget is spent", { slug, perHour: auto.perHour });
+      return state;
+    }
+
+    this.autoRated.push(Date.now());
+    const job = this.start(slug);
+    this.log.info("auto-rating a skill a visitor opened", {
+      slug, job: job.id.slice(0, 8), usedThisHour: this.autoRated.length, perHour: auto.perHour, pending,
+    });
+    return this.status(slug);
   }
 
   waitFor(id: string, pollMs = 200): Promise<ScoreJob> {
