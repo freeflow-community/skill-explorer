@@ -301,6 +301,11 @@ test("summaries end at a sentence or clause, and install commands quote what nee
     const out = summary(text, 100);
     assert.ok(out.startsWith(starts), `summary dropped the start of the description: ${out}`);
   }
+  // Trimming can land right after a sentence end, which already has its full stop.
+  assert.equal(
+    summary("Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use when the user wants generative art.", 100),
+    "Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration.",
+  );
   // Sentences are still preferred when the first one really does start the text.
   assert.equal(summary("First sentence is short. A second one that runs past the limit we set here for it.", 40), "First sentence is short.");
 
