@@ -44,7 +44,9 @@ export function summary(text: string, max = 160): string {
   const clause = Math.max(head.lastIndexOf(", "), head.lastIndexOf("; "), head.lastIndexOf(": "));
   const word = head.lastIndexOf(" ");
   const at = clause > 40 ? clause : word > 40 ? word : max;
-  return `${head.slice(0, at).replace(/[,;:\s]+$/, "")}.`;
+  const cut = head.slice(0, at).replace(/[,;:\s]+$/, "");
+  // The cut can land just after a sentence end, which already has its full stop.
+  return /[.!?]$/.test(cut) ? cut : `${cut}.`;
 }
 
 export interface PageMeta {
