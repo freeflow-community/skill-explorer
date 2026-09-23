@@ -1,6 +1,6 @@
 ---
 name: find-skills-on-x
-description: Search X for people posting about agent skills, pull the GitHub repos out of those posts, check them against the skillexplorer.dev index, and register the ones that are new. Use when asked to find new skills on X/Twitter, harvest what people are sharing, or top up the index from social. Proposes candidates and waits for approval before registering.
+description: Search X for people posting about agent skills, pull the GitHub repos out of those posts, check them against the skillexplorer.dev index, register the ones that are new, and reply to each original post with a link to its page on the site. Use when asked to find new skills on X/Twitter, harvest what people are sharing, or top up the index from social. Proposes candidates and waits for approval before registering; the replies then go out on their own.
 ---
 
 # Finding new skills on X
@@ -116,7 +116,66 @@ Append one line per candidate to `found.jsonl`, registered or not:
 {"repo":"https://github.com/o/other","status":"rejected","reason":"no SKILL.md, it's a blog post about skills","from":"...","at":"..."}
 ```
 
+## 6. Reply to the post it came from
+
+Once a repo is registered **and confirmed live**, go back to the post you found it in and
+reply, so the person who shared it knows it was picked up. This is part of the approved run
+— approving the registration approves the reply — and it is the only thing this skill posts.
+
+Wait for the live check in step 5 first. A reply whose link shows nothing is worse than no
+reply, and the index takes a few minutes to swap.
+
+The message is short and plain, close to:
+
+> Cool! Added to our index here: <link>
+
+Vary the opener a little across a batch so five replies in a row don't read as a bot, but
+keep it to the same shape: a few friendly words, then the link. No pitch, no hashtags, no
+emoji, and nothing about the skill's quality — you are telling someone their thing got
+indexed, not reviewing it.
+
+The link depends on what the repo turned out to hold:
+
+- **One skill** → its page, `https://skillexplorer.dev/skill/<slug>`.
+- **Several** → the repo's listing, `https://skillexplorer.dev/search?repo=<url-encoded
+  repo URL>`, which renders as "Skills from owner/repo: N agent skills".
+
+Both have og tags, so X shows a card.
+
+Rules that matter more than the wording:
+
+- **One reply per post.** A post that yielded three repos gets a single reply, not three.
+- **Never reply twice to the same post.** `found.jsonl` records the reply URL; check it
+  before sending, including across earlier runs.
+- **Don't reply to Scott's own posts**, or to a post that is itself a reply to him — that
+  reads as talking to himself.
+- **Only the post the repo actually came from.** Don't go and find the author's other posts.
+
+Drive the reply with the logged-in session from `browser-auth-handoff`:
+
+```js
+await p.goto(postUrl, { waitUntil: "domcontentloaded" });
+await p.waitForSelector('[data-testid="tweetTextarea_0"]');
+await p.click('[data-testid="tweetTextarea_0"]');
+await p.keyboard.type(text);
+await p.waitForSelector('[data-testid="tweetButtonInline"]:not([aria-disabled="true"])');
+await p.click('[data-testid="tweetButtonInline"]');
+```
+
+Then **check it actually posted** — reload the thread and find the reply under the original,
+or load `https://x.com/persingerscott/with_replies`. A composer that silently failed looks
+exactly like one that worked. Record the reply's URL in `found.jsonl` next to the repo:
+
+```json
+{"repo":"https://github.com/o/r","status":"registered","skills":3,"from":"https://x.com/someone/status/123","reply":"https://x.com/persingerscott/status/456","at":"..."}
+```
+
+If a reply fails, say so in the report and leave `reply` unset — don't retry blindly into a
+thread where it may already have landed. Report every reply you sent, with its text and URL:
+they went out in Scott's name, to strangers, without him reading them first.
+
 ## Not your call
 
-Posting, liking, following or replying from the account — this skill only reads X. Removing
-or re-tagging skills already in the index. Registering a repo the human passed on.
+Liking, following, DMing, or posting anything to the timeline. Replying to anything other
+than the post a registered repo came from. Removing or re-tagging skills already in the
+index. Registering a repo the human passed on.
