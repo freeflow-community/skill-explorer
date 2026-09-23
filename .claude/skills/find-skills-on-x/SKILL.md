@@ -134,13 +134,23 @@ keep it to the same shape: a few friendly words, then the link. No pitch, no has
 emoji, and nothing about the skill's quality — you are telling someone their thing got
 indexed, not reviewing it.
 
-The link depends on what the repo turned out to hold:
+**Always link one skill page**, `https://skillexplorer.dev/skill/<slug>` — never a listing
+or a search URL. A skill page carries its own card image at `/og/<slug>.png`; listing and
+search pages fall back to the generic site image, so the reply arrives looking like an ad
+for the site instead of a card for the thing the person made.
 
-- **One skill** → its page, `https://skillexplorer.dev/skill/<slug>`.
-- **Several** → the repo's listing, `https://skillexplorer.dev/search?repo=<url-encoded
-  repo URL>`, which renders as "Skills from owner/repo: N agent skills".
+When the repo holds several skills, pick the one to show, in this order:
 
-Both have og tags, so X shows a card.
+1. **The one the post was about.** A link to `/tree/<ref>/.../skills/<name>/SKILL.md`, or a
+   skill named in the text, says which one they meant. Use it.
+2. **The one that carries the repo's name** — `auto-editor` in `WyattBlue/auto-editor`. It
+   is usually the entry point, and the others hang off it.
+3. **Otherwise the most distinctive**, by the same judgment as step 3: the one that makes a
+   reader curious rather than the most generic.
+
+Say the rest in words if it's worth saying — "all four are in there now" — but only one
+link, so X renders the card for it. The same holds when one post yielded several repos:
+one reply, one skill page, chosen across everything that post produced.
 
 Rules that matter more than the wording:
 
