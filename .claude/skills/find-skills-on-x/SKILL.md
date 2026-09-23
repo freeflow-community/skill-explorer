@@ -150,6 +150,10 @@ Rules that matter more than the wording:
 - **Don't reply to Scott's own posts**, or to a post that is itself a reply to him — that
   reads as talking to himself.
 - **Only the post the repo actually came from.** Don't go and find the author's other posts.
+- **Community posts can't be replied to** this way. Their page renders as an empty
+  "Community post" shell for the session and the composer reports success while nothing
+  lands, so treat a missing reply on the verification pass as a failure and move on —
+  registering the repo was still worth it.
 
 Drive the reply with the logged-in session from `browser-auth-handoff`:
 
