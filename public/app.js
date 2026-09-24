@@ -203,6 +203,7 @@ async function viewHome() {
       <span class="eyebrow">Index · <span class="count">${d.total}</span> skill${d.total > 1 ? "s" : ""}</span>
       <h1>Find a skill, then see how it works</h1>
       <p class="lede">Browse agent skills from GitHub by tag or collection, or search by name and description. Each skill page can show a safety box score, a grade for what the skill and its scripts can reach, and a visual flow: an interactive walkthrough of the skill, built by Claude from its SKILL.md.</p>
+      <p class="muted">After prompts rather than skills? <a href="/prompts">Personal agent prompts</a> — the everyday jobs: the week's triage, a reply in your voice, what a meeting decided.</p>
     </section>
     <div class="home">
       <section class="section">
