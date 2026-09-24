@@ -326,7 +326,11 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
     store: new LocalBlobStore(join(dir, "blobs")), generator, jobsDbPath: ":memory:",
     findSkill: (s) => holder.current.getBySlug(s), loadSources: async () => [{ path: "SKILL.md", content: "x" }],
   });
-  const scores = new ScoreService({ store: new LocalBlobStore(join(dir, "blobs")), rater: new StubRater(0), jobsDbPath: ":memory:", findSkill: (s) => holder.current.getBySlug(s) });
+  const scores = new ScoreService({
+    store: new LocalBlobStore(join(dir, "blobs")), rater: new StubRater(0), jobsDbPath: ":memory:",
+    findSkill: (s) => holder.current.getBySlug(s),
+    loadFiles: async () => ({ files: [{ path: "SKILL.md" }, { path: "run.sh" }], sources: [{ path: "SKILL.md", content: "# x" }, { path: "run.sh", content: "sudo rm -rf /tmp/x" }] }),
+  });
   const app = createApp({ index: holder, flows, generator, stars: new StarStore({ dbPath: ":memory:" }), scores, pages: new PageRenderer("https://example.test/") });
 
   const home = await app.request("/");
@@ -355,8 +359,18 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   assert.match(skillHtml, /<h2 id="install">Install<\/h2>[\s\S]*npx skills add acme\/skills --skill review-pr/, "install command");
   assert.match(skillHtml, /cp -r skills\/review-pr ~\/.claude\/skills\/review-pr/, "manual copy");
   assert.match(skillHtml, /<h2 id="safety">Safety box score<\/h2>[\s\S]*href="\/safety"/, "links the methodology");
+  assert.doesNotMatch(skillHtml, /"@type":"Review"/, "an unrated skill carries no rating");
   assert.match(skillHtml, /"@type":"BreadcrumbList"/);
   assert.match(skillHtml, /"@type":"SoftwareSourceCode"[^<]*"codeRepository":"https:\/\/github.com\/acme\/skills"/);
+
+  // Once rated, the grade, every category level and the checklist are in the HTML and the structured data, so search engines see them without running the app.
+  await scores.waitFor(scores.start("review-pr").id, 5);
+  const ratedHtml = await (await app.request("/skill/review-pr")).text();
+  assert.match(ratedHtml, /<meta name="description" content="[^"]*Safety box score: D, elevated risk\."/);
+  assert.match(ratedHtml, /<h2 id="safety">Safety box score<\/h2>\s*<p>Grade <strong>D<\/strong>, elevated risk/);
+  assert.match(ratedHtml, /<th scope="row">Instruction hijack surface<\/th><td>[0-3] \((none|low|moderate|high)\)<\/td>/, "every category has a level");
+  assert.match(ratedHtml, /<th scope="row">Privilege &amp; persistence<\/th><td>3 \(high\)<\/td>/, "sudo rates privilege high");
+  assert.match(ratedHtml, /"@type":"Review"[^<]*"ratingValue":"D","bestRating":"A","worstRating":"F"/, "the rating is a schema.org Review on the SoftwareSourceCode");
 
   const missing = await app.request("/skill/nope");
   assert.equal(missing.status, 404);
@@ -398,7 +412,9 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   assert.match(skill.headers.get("content-security-policy")!, /frame-ancestors 'self'/);
   assert.equal(skill.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
   assert.match(skill.headers.get("etag")!, /^W?\/?"/);
-  assert.equal((await app.request("/skill/review-pr", { headers: { "if-none-match": skill.headers.get("etag")! } })).status, 304);
+  const fresh = await app.request("/skill/review-pr");
+  assert.notEqual(fresh.headers.get("etag"), skill.headers.get("etag"), "the ETag changes once the page carries a rating");
+  assert.equal((await app.request("/skill/review-pr", { headers: { "if-none-match": fresh.headers.get("etag")! } })).status, 304);
   assert.equal((await app.request("/api/home")).headers.get("cache-control"), null);
   assert.equal(home.headers.get("cache-control"), "public, max-age=60, stale-while-revalidate=86400");
 

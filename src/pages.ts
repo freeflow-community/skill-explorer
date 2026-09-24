@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Skill } from "./db.ts";
 import { PROMPT_COLLECTIONS, populatedGroups, promptsInGroup, type Prompt } from "./prompts.ts";
-import type { SafetySummary } from "./scores/jobs.ts";
+import type { SafetyReport, SafetySummary } from "./scores/jobs.ts";
 import { CATEGORIES, GRADE_LABELS } from "./scores/scan.ts";
 
 /**
@@ -83,7 +83,11 @@ export interface SkillExtras {
   related: Skill[];
   /** The stored grade, when the skill has been rated. */
   safety?: SafetySummary;
+  /** The full report, when it could be loaded: the page then carries the category levels for crawlers. */
+  report?: SafetyReport | null;
 }
+
+const LEVEL_WORDS = ["none", "low", "moderate", "high"] as const;
 
 const repoLabel = (url: string) => url.replace("https://github.com/", "");
 const repoOwner = (url: string) => repoLabel(url).split("/")[0] ?? "";
@@ -186,7 +190,7 @@ export class PageRenderer {
     };
   }
 
-  private skillSchema(s: Skill) {
+  private skillSchema(s: Skill, report?: SafetyReport) {
     return {
       "@type": "SoftwareSourceCode",
       "@id": this.url(`/skill/${enc(s.slug)}#skill`),
@@ -198,6 +202,22 @@ export class PageRenderer {
       dateModified: s.updatedAt.slice(0, 10),
       isPartOf: { "@id": this.url("/#website") },
       publisher: { "@id": this.orgId() },
+      review: report
+        ? {
+            "@type": "Review",
+            name: "Safety box score",
+            reviewBody: report.summary,
+            datePublished: report.ratedAt.slice(0, 10),
+            author: { "@id": this.orgId() },
+            reviewRating: {
+              "@type": "Rating",
+              ratingValue: report.grade,
+              bestRating: "A",
+              worstRating: "F",
+              ratingExplanation: `${report.label}: ${report.score} of 100 risk points across ${report.categories.length} categories, from the skill's own files.`,
+            },
+          }
+        : undefined,
     };
   }
 
@@ -269,11 +289,13 @@ export class PageRenderer {
     const path = `/skill/${enc(s.slug)}`;
     const title = `${s.name}: Claude Code skill by ${owner}`;
     const lead = s.description ? summary(s.description, 100) : `${s.name} is an agent skill.`;
-    const description = `${lead} From ${repo} on GitHub, with install steps for Claude Code and Codex.`;
+    const report = extras.report ?? undefined;
+    const safetySummary = extras.safety ?? (report ? { grade: report.grade, score: report.score, label: report.label, ratedAt: report.ratedAt } : undefined);
+    const description = `${lead} From ${repo} on GitHub, with install steps for Claude Code and Codex.${safetySummary ? ` Safety box score: ${safetySummary.grade}, ${safetySummary.label.toLowerCase()}.` : ""}`;
     const install = installCommands(s);
     const trail = [{ name: "Skills", path: "/" }, ...(s.collection ? [{ name: s.collection, path: `/search?collection=${enc(s.collection)}` }] : [])];
-    const safety = extras.safety
-      ? `<p>Grade <strong>${esc(extras.safety.grade)}</strong>, ${esc(extras.safety.label.toLowerCase())}: ${extras.safety.score} of 100 risk points, rated ${esc(extras.safety.ratedAt.slice(0, 10))}. The grade rates what the skill and its scripts can reach on the machine of whoever installs it, across eight categories from shell execution to secrets access. <a href="/safety">How the score works</a>.</p>`
+    const safety = safetySummary
+      ? `<p>Grade <strong>${esc(safetySummary.grade)}</strong>, ${esc(safetySummary.label.toLowerCase())}: ${safetySummary.score} of 100 risk points, rated ${esc(safetySummary.ratedAt.slice(0, 10))}. The grade rates what the skill and its scripts can reach on the machine of whoever installs it, across eight categories from shell execution to secrets access. <a href="/safety">How the score works</a>.</p>${report ? this.safetyDetail(report) : ""}`
       : `<p>Not rated yet. A safety box score grades what a skill and its scripts can reach on the machine of whoever installs it, across eight categories from shell execution to secrets access. Anyone can request one from this page; it is saved for everyone. <a href="/safety">How the score works</a>.</p>`;
     const body = `
       ${this.crumbs(trail, s.name)}
@@ -297,7 +319,27 @@ export class PageRenderer {
         <dt>Updated</dt><dd>${esc(s.updatedAt.slice(0, 10))}</dd>
       </dl>
       ${extras.related.length ? `<h2 id="related">Related skills</h2>${this.skillList(extras.related)}` : ""}`;
-    return this.render({ title, description, path, image: `/og/${enc(s.slug)}.png`, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s)] }, body);
+    return this.render({ title, description, path, image: `/og/${enc(s.slug)}.png`, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s, report)] }, body);
+  }
+
+  /** The rated categories, summary and checklist as plain HTML, so the grade's reasons are indexable without the app. */
+  private safetyDetail(r: SafetyReport): string {
+    const byKey = new Map(r.categories.map((c) => [c.key, c]));
+    const rows = CATEGORIES.map((cat) => {
+      const c = byKey.get(cat.key);
+      const level = c?.level ?? 0;
+      return `<tr><th scope="row">${esc(cat.name)}</th><td>${level} (${LEVEL_WORDS[level]})</td><td>${esc(c?.rationale ?? "")}</td></tr>`;
+    }).join("");
+    const files = r.sourceFiles.length;
+    return `
+      <p>${esc(r.summary)}</p>
+      <table>
+        <caption>Category levels, from 0 (none) to 3 (high)</caption>
+        <thead><tr><th scope="col">Category</th><th scope="col">Level</th><th scope="col">Why</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${r.beforeInstalling.length ? `<h3 id="before-installing">Before installing</h3><ul>${r.beforeInstalling.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+      <p class="muted">Rated ${esc(r.ratedAt.slice(0, 10))} by an automated review of ${files} file${files === 1 ? "" : "s"} from the skill's repository.</p>`;
   }
 
   search(query: SearchQuery, data: SearchPage): string {
