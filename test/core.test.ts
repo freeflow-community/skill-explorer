@@ -16,6 +16,7 @@ import { ScoreService } from "../src/scores/jobs.ts";
 import { StubRater, toReview } from "../src/scores/rater.ts";
 import { buildInventory, classifyFile, scanSources, scoreLevels, type CategoryKey, type Level } from "../src/scores/scan.ts";
 import { installCommands, PAGE_SIZE, PageRenderer, summary } from "../src/pages.ts";
+import { PROMPTS, PROMPT_COLLECTIONS, PROMPT_GROUPS, SNIPPET_MAX, populatedGroups } from "../src/prompts.ts";
 import { createApp, IndexHolder, looksLikeVisitor } from "../src/server.ts";
 import { StarStore } from "../src/stars.ts";
 import { LocalBlobStore } from "../src/storage.ts";
@@ -556,6 +557,37 @@ test("SKILL.md preview: frontmatter rows, rendered body, and one fetch per cache
   assert.doesNotMatch(p.html, /name: review-pr/, "frontmatter is listed on its own, not left in the body");
   await previews.get(skill, "x");
   assert.equal(reads, 1, "a second open inside the cache window doesn't hit GitHub again");
+});
+
+test("personal agent prompts: snippets stay snippets, and every entry is attributed", () => {
+  const groups = new Set(PROMPT_GROUPS.map((g) => g.key));
+  const ids = new Set<string>();
+  for (const p of PROMPTS) {
+    // A snippet longer than this is a copy of someone's prompt, which is the one thing
+    // this section must never become.
+    assert.ok(p.snippet.length <= SNIPPET_MAX, `${p.id}: snippet is ${p.snippet.length} chars, over ${SNIPPET_MAX}`);
+    assert.ok(p.author.trim(), `${p.id}: needs an author`);
+    assert.ok(groups.has(p.group), `${p.id}: unknown group ${p.group}`);
+    assert.ok(!ids.has(p.id), `${p.id}: duplicate id`);
+    ids.add(p.id);
+    // Anything we did not write ourselves has to link out to where it really lives.
+    if (p.author !== "Skills Explorer") assert.match(p.url, /^https:\/\//, `${p.id}: a borrowed prompt must link to its source`);
+  }
+  for (const c of PROMPT_COLLECTIONS) assert.match(c.url, /^https:\/\//);
+  assert.ok(populatedGroups().length >= 3, "the page needs a few groups to be worth grouping");
+});
+
+test("the prompts page renders every entry, grouped, with its link", () => {
+  const pages = new PageRenderer("https://skillexplorer.dev");
+  const html = pages.prompts();
+  for (const p of PROMPTS) {
+    assert.ok(html.includes(`id="${p.id}"`), `${p.id} is missing from the page`);
+    assert.ok(html.includes(p.title), `${p.title} is missing from the page`);
+  }
+  for (const g of populatedGroups()) assert.ok(html.includes(`id="${g.key}"`), `group ${g.key} is missing`);
+  assert.ok(html.includes("museatwork.app"), "the collection it started from should be credited");
+  assert.match(html, /<meta property="og:url" content="https:\/\/skillexplorer.dev\/prompts">/);
+  assert.match(html, /<title>Personal agent prompts/);
 });
 
 test("safety scan: signals, inventory and file kinds", () => {
