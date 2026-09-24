@@ -341,11 +341,16 @@ export function createApp(opts: {
 
   app.get("/favorites", (c) => c.html(pages.favorites()));
 
-  app.get("/skill/:slug", (c) => {
+  app.get("/skill/:slug", async (c) => {
     const slug = c.req.param("slug");
     const skill = idx().getBySlug(slug);
     if (!skill) return c.html(pages.notFound(`"${slug}" isn't in the index. It may have been renamed or removed.`), 404);
-    return c.html(pages.skill(skill, skillLinks(skill), { related: idx().related(skill), safety: scores.summaries()[skill.slug] }));
+    // The full report puts the category levels in the HTML for crawlers; it is cached after the first load.
+    const report = await scores.getReport(skill.slug).catch((e) => {
+      log.warn("could not load the safety report for the page", { slug: skill.slug, error: e instanceof Error ? e : String(e) });
+      return null;
+    });
+    return c.html(pages.skill(skill, skillLinks(skill), { related: idx().related(skill), safety: scores.summaries()[skill.slug], report }));
   });
 
   // Open Graph cards. Every skill gets its own, drawn from its name, owner, description, tags
