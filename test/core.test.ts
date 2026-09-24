@@ -335,6 +335,8 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   assert.match(homeHtml, /<title>Agent Skills Directory for Claude Code &amp; Codex · Skills Explorer<\/title>/);
   assert.match(homeHtml, /<link rel="canonical" href="https:\/\/example.test\/">/);
   assert.match(homeHtml, /<a href="\/skill\/review-pr">/, "crawlers can reach every skill from the home page");
+  // The prompts section is only findable if the home page points at it; the footer alone is too easy to miss.
+  assert.match(homeHtml, /<h1>[\s\S]{0,400}?<a href="\/prompts">/, "the home page body links the prompts section");
   assert.match(homeHtml, /"@type":"WebSite"[^<]*"urlTemplate":"https:\/\/example.test\/search\?q=\{search_term_string\}"/, "sitelinks search box");
   assert.match(homeHtml, /"@type":"Organization"/);
   assert.match(homeHtml, /<footer class="site-foot">[\s\S]*href="\/skills"[\s\S]*href="\/about"[\s\S]*href="\/safety"/, "every page links the hub pages");

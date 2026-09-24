@@ -255,7 +255,7 @@ export class PageRenderer {
     const description = `Browse ${data.total} agent skills (SKILL.md) from GitHub for Claude Code, Codex and other AI coding agents. Search by tag, collection or repository; each skill page has install steps and can show a safety box score.`;
     const body = `
       <h1>${esc(title)}</h1>
-      <p>${esc(SITE_TAGLINE)} ${data.total} skills indexed. <a href="/about">What is an agent skill?</a> · <a href="/safety">How safety box scores work</a></p>
+      <p>${esc(SITE_TAGLINE)} ${data.total} skills indexed. <a href="/about">What is an agent skill?</a> · <a href="/safety">How safety box scores work</a> · <a href="/prompts">Personal agent prompts</a></p>
       <h2>Discover skills</h2>
       ${this.skillList(data.discover)}
       ${data.collections.length ? `<h2>Collections</h2><ul class="ssr-list">${data.collections.map((c) => `<li><a href="/search?collection=${enc(c.collection)}">${esc(c.collection)}</a> (${c.count})</li>`).join("")}</ul>` : ""}
