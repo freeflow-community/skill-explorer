@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Skill } from "./db.ts";
+import { PROMPT_COLLECTIONS, populatedGroups, promptsInGroup, type Prompt } from "./prompts.ts";
 import type { SafetySummary } from "./scores/jobs.ts";
 import { CATEGORIES, GRADE_LABELS } from "./scores/scan.ts";
 
@@ -386,6 +387,66 @@ export class PageRenderer {
     return this.render({ title, description, path: "/about", jsonLd: [this.breadcrumbs([{ name: "Skills", path: "/" }, { name: "About", path: "/about" }])] }, body);
   }
 
+  /**
+   * Personal agent prompts: one grouped page rather than a page per prompt. Each entry shows
+   * a snippet and links to the original — the prompt belongs to whoever wrote it.
+   */
+  prompts(): string {
+    const groups = populatedGroups();
+    const total = groups.reduce((n, g) => n + promptsInGroup(g.key).length, 0);
+    const title = "Personal agent prompts";
+    const description = `${plural(total, "prompt")} for a personal AI assistant, grouped by the job they do: ${groups
+      .map((g) => g.name.toLowerCase())
+      .join(", ")}. Each links to the original.`;
+
+    const entry = (p: Prompt) => `
+      <li class="prompt" id="${esc(p.id)}">
+        <div class="prompt-head">
+          <h3>${esc(p.title)}</h3>
+          <a class="anchor" href="#${esc(p.id)}" aria-label="Link to ${esc(p.title)}">#</a>
+        </div>
+        <p class="prompt-summary">${esc(p.summary)}</p>
+        <blockquote class="prompt-snippet">${esc(p.snippet)}</blockquote>
+        <p class="prompt-meta">${esc(p.author)}${p.source ? ` · ${esc(p.source)}` : ""}${
+          p.url.startsWith("http") ? ` · <a href="${esc(p.url)}" rel="noopener nofollow">Read the full prompt ↗</a>` : ""
+        }</p>
+      </li>`;
+
+    const body = `
+      ${this.crumbs([{ name: "Skills", path: "/" }], title)}
+      <article class="prose">
+      <h1>${title}</h1>
+      <p>Prompts that put a personal assistant to work — not coding skills, but the everyday jobs: the week's triage, a reply in your own voice, what a meeting actually decided. ${plural(total, "prompt")}, grouped by job.</p>
+      <p class="muted">Each entry is a snippet and a link. The prompts belong to the people who wrote them, so the full text stays where they published it.</p>
+      ${groups
+        .map(
+          (g) => `
+        <section class="prompt-group">
+          <h2 id="${esc(g.key)}">${esc(g.name)}</h2>
+          <p>${esc(g.blurb)}</p>
+          <ul class="prompt-list">${promptsInGroup(g.key).map(entry).join("")}</ul>
+        </section>`,
+        )
+        .join("")}
+      <h2 id="collections">Collections worth browsing</h2>
+      <p>Whole libraries of these, kept by other people:</p>
+      <ul class="prompt-list">
+        ${PROMPT_COLLECTIONS.map(
+          (c) => `<li class="prompt">
+            <div class="prompt-head"><h3><a href="${esc(c.url)}" rel="noopener nofollow">${esc(c.name)} ↗</a></h3></div>
+            <p class="prompt-summary">${esc(c.description)}</p>
+            <p class="prompt-meta">${esc(c.author)}${c.count ? ` · ${plural(c.count, "prompt")}` : ""}</p>
+          </li>`,
+        ).join("")}
+      </ul>
+      <p>Know one that belongs here, or wrote a prompt worth adding? Open an issue on <a href="${GITHUB_URL}/issues" rel="noopener">GitHub</a>.</p>
+      </article>`;
+    return this.render(
+      { title, description, path: "/prompts", jsonLd: [this.breadcrumbs([{ name: "Skills", path: "/" }, { name: title, path: "/prompts" }])] },
+      body,
+    );
+  }
+
   /** The safety box score methodology, kept in step with the categories and grade bands in code. */
   safety(): string {
     const title = "Safety box score: how skills are rated";
@@ -445,6 +506,7 @@ export class PageRenderer {
       entry("/skills", newest),
       entry("/about"),
       entry("/safety"),
+      entry("/prompts"),
       ...Array.from({ length: pages }, (_, i) => entry(this.searchPath({}, i + 1), newest)),
       ...collections.map((c) => entry(`/search?collection=${enc(c.collection)}`)),
       ...skills.map((s) => entry(`/skill/${enc(s.slug)}`, s.updatedAt)),

@@ -175,7 +175,7 @@ export function createApp(opts: {
     if (cache && c.res.status === 200 && !h.has("Cache-Control")) h.set("Cache-Control", cache);
   });
   // Conditional requests for the rendered pages and the sitemap.
-  for (const path of ["/", "/search", "/skills", "/about", "/safety", "/sitemap.xml", "/skill/*"]) app.use(path, etag());
+  for (const path of ["/", "/search", "/skills", "/about", "/safety", "/prompts", "/sitemap.xml", "/skill/*"]) app.use(path, etag());
 
   /** One page of search results with the total, for the listing pages and the JSON API. */
   const searchPage = (query: SearchQuery) => {
@@ -337,6 +337,7 @@ export function createApp(opts: {
   app.get("/skills", (c) => c.html(pages.allSkills(idx().all())));
   app.get("/about", (c) => c.html(pages.about(idx().count())));
   app.get("/safety", (c) => c.html(pages.safety()));
+  app.get("/prompts", (c) => c.html(pages.prompts()));
 
   app.get("/favorites", (c) => c.html(pages.favorites()));
 

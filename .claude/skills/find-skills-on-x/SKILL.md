@@ -1,6 +1,6 @@
 ---
 name: find-skills-on-x
-description: Search X for people posting about agent skills, pull the GitHub repos out of those posts, check them against the skillexplorer.dev index, and register the ones that are new. Use when asked to find new skills on X/Twitter, harvest what people are sharing, or top up the index from social. Proposes candidates and waits for approval before registering.
+description: Search X for people posting about agent skills, pull the GitHub repos out of those posts, check them against the skillexplorer.dev index, register the ones that are new, and reply to each original post with a link to its page on the site. Use when asked to find new skills on X/Twitter, harvest what people are sharing, or top up the index from social. Proposes candidates and waits for approval before registering; the replies then go out on their own.
 ---
 
 # Finding new skills on X
@@ -116,7 +116,80 @@ Append one line per candidate to `found.jsonl`, registered or not:
 {"repo":"https://github.com/o/other","status":"rejected","reason":"no SKILL.md, it's a blog post about skills","from":"...","at":"..."}
 ```
 
+## 6. Reply to the post it came from
+
+Once a repo is registered **and confirmed live**, go back to the post you found it in and
+reply, so the person who shared it knows it was picked up. This is part of the approved run
+— approving the registration approves the reply — and it is the only thing this skill posts.
+
+Wait for the live check in step 5 first. A reply whose link shows nothing is worse than no
+reply, and the index takes a few minutes to swap.
+
+The message is short and plain, close to:
+
+> Cool! Added to our index here: <link>
+
+Vary the opener a little across a batch so five replies in a row don't read as a bot, but
+keep it to the same shape: a few friendly words, then the link. No pitch, no hashtags, no
+emoji, and nothing about the skill's quality — you are telling someone their thing got
+indexed, not reviewing it.
+
+**Always link one skill page**, `https://skillexplorer.dev/skill/<slug>` — never a listing
+or a search URL. A skill page carries its own card image at `/og/<slug>.png`; listing and
+search pages fall back to the generic site image, so the reply arrives looking like an ad
+for the site instead of a card for the thing the person made.
+
+When the repo holds several skills, pick the one to show, in this order:
+
+1. **The one the post was about.** A link to `/tree/<ref>/.../skills/<name>/SKILL.md`, or a
+   skill named in the text, says which one they meant. Use it.
+2. **The one that carries the repo's name** — `auto-editor` in `WyattBlue/auto-editor`. It
+   is usually the entry point, and the others hang off it.
+3. **Otherwise the most distinctive**, by the same judgment as step 3: the one that makes a
+   reader curious rather than the most generic.
+
+Say the rest in words if it's worth saying — "all four are in there now" — but only one
+link, so X renders the card for it. The same holds when one post yielded several repos:
+one reply, one skill page, chosen across everything that post produced.
+
+Rules that matter more than the wording:
+
+- **One reply per post.** A post that yielded three repos gets a single reply, not three.
+- **Never reply twice to the same post.** `found.jsonl` records the reply URL; check it
+  before sending, including across earlier runs.
+- **Don't reply to Scott's own posts**, or to a post that is itself a reply to him — that
+  reads as talking to himself.
+- **Only the post the repo actually came from.** Don't go and find the author's other posts.
+- **Community posts can't be replied to** this way. Their page renders as an empty
+  "Community post" shell for the session and the composer reports success while nothing
+  lands, so treat a missing reply on the verification pass as a failure and move on —
+  registering the repo was still worth it.
+
+Drive the reply with the logged-in session from `browser-auth-handoff`:
+
+```js
+await p.goto(postUrl, { waitUntil: "domcontentloaded" });
+await p.waitForSelector('[data-testid="tweetTextarea_0"]');
+await p.click('[data-testid="tweetTextarea_0"]');
+await p.keyboard.type(text);
+await p.waitForSelector('[data-testid="tweetButtonInline"]:not([aria-disabled="true"])');
+await p.click('[data-testid="tweetButtonInline"]');
+```
+
+Then **check it actually posted** — reload the thread and find the reply under the original,
+or load `https://x.com/persingerscott/with_replies`. A composer that silently failed looks
+exactly like one that worked. Record the reply's URL in `found.jsonl` next to the repo:
+
+```json
+{"repo":"https://github.com/o/r","status":"registered","skills":3,"from":"https://x.com/someone/status/123","reply":"https://x.com/persingerscott/status/456","at":"..."}
+```
+
+If a reply fails, say so in the report and leave `reply` unset — don't retry blindly into a
+thread where it may already have landed. Report every reply you sent, with its text and URL:
+they went out in Scott's name, to strangers, without him reading them first.
+
 ## Not your call
 
-Posting, liking, following or replying from the account — this skill only reads X. Removing
-or re-tagging skills already in the index. Registering a repo the human passed on.
+Liking, following, DMing, or posting anything to the timeline. Replying to anything other
+than the post a registered repo came from. Removing or re-tagging skills already in the
+index. Registering a repo the human passed on.
