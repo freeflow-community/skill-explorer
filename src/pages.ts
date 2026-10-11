@@ -190,7 +190,7 @@ export class PageRenderer {
     };
   }
 
-  private skillSchema(s: Skill, report?: SafetyReport) {
+  private skillSchema(s: Skill) {
     return {
       "@type": "SoftwareSourceCode",
       "@id": this.url(`/skill/${enc(s.slug)}#skill`),
@@ -202,22 +202,6 @@ export class PageRenderer {
       dateModified: s.updatedAt.slice(0, 10),
       isPartOf: { "@id": this.url("/#website") },
       publisher: { "@id": this.orgId() },
-      review: report
-        ? {
-            "@type": "Review",
-            name: "Safety box score",
-            reviewBody: report.summary,
-            datePublished: report.ratedAt.slice(0, 10),
-            author: { "@id": this.orgId() },
-            reviewRating: {
-              "@type": "Rating",
-              ratingValue: report.grade,
-              bestRating: "A",
-              worstRating: "F",
-              ratingExplanation: `${report.label}: ${report.score} of 100 risk points across ${report.categories.length} categories, from the skill's own files.`,
-            },
-          }
-        : undefined,
     };
   }
 
@@ -319,7 +303,7 @@ export class PageRenderer {
         <dt>Updated</dt><dd>${esc(s.updatedAt.slice(0, 10))}</dd>
       </dl>
       ${extras.related.length ? `<h2 id="related">Related skills</h2>${this.skillList(extras.related)}` : ""}`;
-    return this.render({ title, description, path, image: `/og/${enc(s.slug)}.png`, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s, report)] }, body);
+    return this.render({ title, description, path, image: `/og/${enc(s.slug)}.png`, jsonLd: [this.breadcrumbs([...trail, { name: s.name, path }]), this.skillSchema(s), this.organization(), this.website()] }, body);
   }
 
   /** The rated categories, summary and checklist as plain HTML, so the grade's reasons are indexable without the app. */
