@@ -4,6 +4,11 @@ import { initializePosthog } from "./posthog.js";
 
 const app = document.getElementById("app");
 const qInput = document.getElementById("q");
+// Keep the server page as a fallback for this exact URL. A failed enhancement must not
+// turn valid HTML into an error page, or show the previous page after navigation.
+const serverPage = app.textContent.trim() && !location.hash.startsWith("#/")
+  ? { url: location.href, html: app.innerHTML, title: document.title }
+  : null;
 let routeId = 0; // bumps on every navigation so stale polls and timers stop
 let pendingAnchor = null; // element to scroll to after the route renders
 let anchorRetry = 0; // the flow iframe loads late, so a requested anchor is re-applied when it resizes
@@ -316,7 +321,7 @@ async function viewSkill(slug, params = new URLSearchParams()) {
   try {
     d = await api(`/api/skills/${enc(slug)}`);
   } catch (e) {
-    if (e.status !== 404) throw e;
+    if (e.status !== 404 || serverPage?.url === location.href) throw e;
     app.innerHTML = `<div class="empty"><h1>Skill not found</h1><p class="muted">“${esc(slug)}” isn't in the index. It may have been renamed or removed.</p><a class="btn" href="/">Back to the index</a></div>`;
     return;
   }
@@ -684,7 +689,7 @@ function scrollToAnchor(id) {
 const clientRendered = (path) => path === "/" || path === "/index.html" || path === "/search" || path === "/favorites" || path.startsWith("/skill/");
 
 async function route() {
-  routeId++;
+  const myRoute = ++routeId;
   frameEl = null;
   document.getElementById("safetyModal")?.close();
   const path = location.pathname || "/";
@@ -697,8 +702,15 @@ async function route() {
     else if (path === "/search") await viewSearch(params);
     else await viewHome();
   } catch (e) {
-    app.innerHTML = `<div class="note bad"><strong>Something went wrong loading this page.</strong> ${esc(e.message)}</div>`;
+    if (myRoute !== routeId) return;
+    if (serverPage?.url === location.href) {
+      app.innerHTML = serverPage.html;
+      document.title = serverPage.title;
+    } else {
+      app.innerHTML = `<div class="note bad"><strong>Something went wrong loading this page.</strong> ${esc(e.message)}</div>`;
+    }
   }
+  if (myRoute !== routeId) return;
   const anchorId = pendingAnchor;
   pendingAnchor = null;
   if (anchorId) {
@@ -769,4 +781,6 @@ api("/api/config")
     await initializePosthog(c.posthog).catch((e) => console.warn("PostHog not initialized:", e.message));
   })
   .catch(() => {})
-  .finally(route);
+  .finally(() => {
+    if (routeId === 0) route();
+  });
