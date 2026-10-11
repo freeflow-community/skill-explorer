@@ -363,14 +363,23 @@ test("HTML pages: pre-rendered routes, old hash links, sitemap and robots", asyn
   assert.match(skillHtml, /"@type":"BreadcrumbList"/);
   assert.match(skillHtml, /"@type":"SoftwareSourceCode"[^<]*"codeRepository":"https:\/\/github.com\/acme\/skills"/);
 
-  // Once rated, the grade, every category level and the checklist are in the HTML and the structured data, so search engines see them without running the app.
+  // Once rated, the grade, every category level and the checklist are in the HTML, so search engines see them without running the app.
   await scores.waitFor(scores.start("review-pr").id, 5);
   const ratedHtml = await (await app.request("/skill/review-pr")).text();
   assert.match(ratedHtml, /<meta name="description" content="[^"]*Safety box score: D, elevated risk\."/);
   assert.match(ratedHtml, /<h2 id="safety">Safety box score<\/h2>\s*<p>Grade <strong>D<\/strong>, elevated risk/);
   assert.match(ratedHtml, /<th scope="row">Instruction hijack surface<\/th><td>[0-3] \((none|low|moderate|high)\)<\/td>/, "every category has a level");
   assert.match(ratedHtml, /<th scope="row">Privilege &amp; persistence<\/th><td>3 \(high\)<\/td>/, "sudo rates privilege high");
-  assert.match(ratedHtml, /"@type":"Review"[^<]*"ratingValue":"D","bestRating":"A","worstRating":"F"/, "the rating is a schema.org Review on the SoftwareSourceCode");
+  const graph = JSON.parse(ratedHtml.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)![1]!)["@graph"];
+  const source = graph.find((node: { "@type": string }) => node["@type"] === "SoftwareSourceCode");
+  assert.ok(source, "skill retains its source-code metadata");
+  assert.equal(source.review, undefined, "source-code safety reports do not declare unsupported Google review snippets");
+  assert.doesNotMatch(ratedHtml, /"@type":"(Review|Rating|AggregateRating)"/);
+  const publisher = graph.find((node: { "@id": string }) => node["@id"] === source.publisher["@id"]);
+  assert.equal(publisher["@type"], "Organization");
+  assert.equal(publisher.name, "Skills Explorer", "publisher is defined on the skill page");
+  const website = graph.find((node: { "@id": string }) => node["@id"] === source.isPartOf["@id"]);
+  assert.equal(website["@type"], "WebSite", "website reference also resolves locally");
 
   const missing = await app.request("/skill/nope");
   assert.equal(missing.status, 404);
