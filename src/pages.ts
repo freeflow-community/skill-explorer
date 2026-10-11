@@ -556,6 +556,6 @@ export class PageRenderer {
   }
 
   robots(): string {
-    return `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /flows/\nDisallow: /favorites\nSitemap: ${this.url("/sitemap.xml")}\n`;
+    return `User-agent: *\nAllow: /\nDisallow: /api/\nAllow: /api/config$\nAllow: /api/home$\nAllow: /api/search?\nAllow: /api/popular?\nAllow: /api/skills/\nDisallow: /flows/\nDisallow: /favorites\nSitemap: ${this.url("/sitemap.xml")}\n`;
   }
 }
